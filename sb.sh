@@ -8,14 +8,17 @@ SERVICE_NAME=sing-box
 VLESS_PORT=39001
 TROJAN_PORT=39002
 ANYTLS_PORT=39003
-SNELL_PORT=39004
-SNELL_V6_PORT=39005
+HY2_PORT=39004
+TUIC_PORT=39005
+SNELL_PORT=39006
+SNELL_V6_PORT=39007
 
 VLESS_UUID=""
 REALITY_PRIVATE=""
 REALITY_PUBLIC=""
 REALITY_SHORT_ID=""
 TROJAN_PASSWORD=""
+HY2_PASSWORD=""
 SNELL_PSK=""
 
 SNI=www.tencentcloud.com
@@ -55,12 +58,14 @@ usage() {
   cat << 'USAGE'
 sing-box installer for Alpine Linux and Debian/Ubuntu.
 
-Installs sing-box and starts five inbounds with random credentials:
+Installs sing-box and starts inbound protocols:
   * VLESS + REALITY (XTLS-Vision)  on 39001/tcp
   * Trojan                         on 39002/tcp
   * AnyTLS                         on 39003/tcp
-  * Snell v5 (v4 compatible)       on 39004/tcp
-  * Snell v6                       on 39005/tcp
+  * Hysteria2                      on 39004/udp
+  * TUIC v5                        on 39005/udp
+  * Snell v5 (v4 compatible)       on 39006/tcp
+  * Snell v6                       on 39007/tcp
 
 Usage:
   ./sb.sh             install (or repair) and start
@@ -69,7 +74,7 @@ Usage:
 
 Always installs the latest stable sing-box release; re-running upgrades it.
 REALITY and Trojan use www.tencentcloud.com as the SNI.
-Trojan and AnyTLS use a self-signed certificate; clients skip verification.
+Trojan, AnyTLS, Hysteria2 and TUIC use a self-signed certificate; clients skip verification.
 Each install generates fresh credentials; update clients after re-running.
 
 State lives under /root/sing-box (binary, config, logs, pids).
@@ -254,6 +259,7 @@ generate_credentials() {
   [ -n "$VLESS_UUID" ] && [ -n "$REALITY_PRIVATE" ] && [ -n "$REALITY_PUBLIC" ] || die "invalid generated credentials"
   REALITY_SHORT_ID=$(openssl rand -hex 8) || die "could not generate REALITY short ID"
   TROJAN_PASSWORD=$(openssl rand -hex 16) || die "could not generate Trojan password"
+  HY2_PASSWORD=$(openssl rand -hex 16) || die "could not generate Hysteria2 password"
   SNELL_PSK=$(openssl rand -hex 32) || die "could not generate Snell key"
 }
 
@@ -351,6 +357,50 @@ write_config() (
       }
     },
     {
+      "type": "hysteria2",
+      "tag": "hy2-in",
+      "listen": "::",
+      "listen_port": $HY2_PORT,
+      "users": [
+        {
+          "name": "default",
+          "password": "$HY2_PASSWORD"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "$SNI",
+        "alpn": [
+          "h3"
+        ],
+        "certificate_path": "$TLS_CERT_FILE",
+        "key_path": "$TLS_KEY_FILE"
+      }
+    },
+    {
+      "type": "tuic",
+      "tag": "tuic-in",
+      "listen": "::",
+      "listen_port": $TUIC_PORT,
+      "users": [
+        {
+          "name": "default",
+          "uuid": "$VLESS_UUID",
+          "password": "$HY2_PASSWORD"
+        }
+      ],
+      "congestion_control": "bbr",
+      "tls": {
+        "enabled": true,
+        "server_name": "$SNI",
+        "alpn": [
+          "h3"
+        ],
+        "certificate_path": "$TLS_CERT_FILE",
+        "key_path": "$TLS_KEY_FILE"
+      }
+    },
+    {
       "type": "snell",
       "tag": "snell-in",
       "listen": "::",
@@ -391,14 +441,15 @@ load_credentials() {
   client_settings=$(jq -er '
     (.inbounds[] | select(.type == "vless")) as $vless |
     (.inbounds[] | select(.type == "trojan")) as $trojan |
+    (.inbounds[] | select(.type == "hysteria2")) as $hy2 |
     (.inbounds[] | select(.type == "snell" and .version == 5)) as $snell |
     [$vless.users[0].uuid, $vless.tls.server_name,
-     $vless.tls.reality.short_id[0], $trojan.users[0].password, $snell.psk] |
+     $vless.tls.reality.short_id[0], $trojan.users[0].password, $hy2.users[0].password, $snell.psk] |
     if all(.[]; type == "string" and length > 0) then @tsv
     else error("missing client settings") end
   ' "$CONF_FILE") || die "could not read credentials from $CONF_FILE"
   [ -n "$client_settings" ] || die "no client credentials found in $CONF_FILE"
-  IFS="$(printf '\t')" read -r VLESS_UUID SNI REALITY_SHORT_ID TROJAN_PASSWORD SNELL_PSK << SETTINGS
+  IFS="$(printf '\t')" read -r VLESS_UUID SNI REALITY_SHORT_ID TROJAN_PASSWORD HY2_PASSWORD SNELL_PSK << SETTINGS
 $client_settings
 SETTINGS
   [ -s "$REALITY_PUBLIC_FILE" ] || die "missing $REALITY_PUBLIC_FILE; re-run sb.sh to generate credentials"
@@ -574,15 +625,20 @@ start_service() {
 verify_listening() {
   sleep 2
   failed=0
-  for p in "$VLESS_PORT/tcp" "$TROJAN_PORT/tcp" "$ANYTLS_PORT/tcp" "$SNELL_PORT/tcp" "$SNELL_V6_PORT/tcp"; do
+  for p in "$VLESS_PORT/tcp" "$TROJAN_PORT/tcp" "$ANYTLS_PORT/tcp" "$HY2_PORT/udp" "$TUIC_PORT/udp" "$SNELL_PORT/tcp" "$SNELL_V6_PORT/tcp"; do
     port=${p%/*}
     proto=${p#*/}
     if command -v ss >/dev/null 2>&1; then
-      ss -lnt 2>/dev/null | grep -qE "[:.]$port[[:space:]]" || failed=1
+      if [ "$proto" = tcp ]; then ss_flags=-lnt; else ss_flags=-lnu; fi
+      ss "$ss_flags" 2>/dev/null | grep -qE "[:.]$port[[:space:]]" || failed=1
     elif command -v netstat >/dev/null 2>&1; then
       netstat -an 2>/dev/null | grep -qE "^$proto.*[:.]$port[[:space:]]" || failed=1
     elif command -v lsof >/dev/null 2>&1; then
-      lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 || failed=1
+      if [ "$proto" = tcp ]; then
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 || failed=1
+      else
+        lsof -nP -iUDP:"$port" >/dev/null 2>&1 || failed=1
+      fi
     fi
   done
   if [ "$failed" -eq 1 ]; then
@@ -594,7 +650,7 @@ verify_listening() {
     fi
     exit 1
   fi
-  ok "listening on $VLESS_PORT/tcp, $TROJAN_PORT/tcp, $ANYTLS_PORT/tcp, $SNELL_PORT/tcp and $SNELL_V6_PORT/tcp"
+  ok "listening on $VLESS_PORT/tcp, $TROJAN_PORT/tcp, $ANYTLS_PORT/tcp, $HY2_PORT/udp, $TUIC_PORT/udp, $SNELL_PORT/tcp and $SNELL_V6_PORT/tcp"
 }
 
 public_ip() {
@@ -660,9 +716,22 @@ show_links() {
   printf '  sni         %s\n' "$SNI"
 
   print_section "AnyTLS" "$ANYTLS_PORT/tcp"
-  printf '  anytls://%s@%s:%s?sni=%s&insecure=1#anytls\n' \
+  printf '  anytls://%s@%s:%s?&sni=%s&insecure=1#anytls\n' \
     "$TROJAN_PASSWORD" "$URI_SERVER" "$ANYTLS_PORT" "$SNI"
   printf '  password    %s\n' "$TROJAN_PASSWORD"
+  printf '  sni         %s\n' "$SNI"
+
+  print_section "Hysteria2" "$HY2_PORT/udp"
+  printf '  hysteria2://%s@%s:%s?sni=%s&alpn=h3&insecure=1#hysteria2\n' \
+    "$HY2_PASSWORD" "$URI_SERVER" "$HY2_PORT" "$SNI"
+  printf '  password    %s\n' "$HY2_PASSWORD"
+  printf '  sni         %s\n' "$SNI"
+
+  print_section "TUIC v5" "$TUIC_PORT/udp"
+  printf '  tuic://%s:%s@%s:%s?sni=%s&alpn=h3&congestion_control=bbr&udp_relay_mode=native&allow_insecure=1#tuic\n' \
+    "$VLESS_UUID" "$HY2_PASSWORD" "$URI_SERVER" "$TUIC_PORT" "$SNI"
+  printf '  uuid        %s\n' "$VLESS_UUID"
+  printf '  password    %s\n' "$HY2_PASSWORD"
   printf '  sni         %s\n' "$SNI"
 
   print_section "Snell v5" "$SNELL_PORT/tcp"
