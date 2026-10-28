@@ -5,13 +5,20 @@ set -eu
 SING_BOX_VERSION=""
 SERVICE_NAME=sing-box
 
-VLESS_PORT=39001
-TROJAN_PORT=39002
-ANYTLS_PORT=39003
-HY2_PORT=39004
-TUIC_PORT=39005
-SNELL_PORT=39006
-SNELL_V6_PORT=39007
+# ==============================================================================
+# 用户自定义配置
+# ==============================================================================
+SNI="${SNI:-}"
+REALITY_DEST_PORT="${REALITY_DEST_PORT:-}"
+
+VLESS_PORT="${VLESS_PORT:-}"
+TROJAN_PORT="${TROJAN_PORT:-}"
+ANYTLS_PORT="${ANYTLS_PORT:-}"
+HY2_PORT="${HY2_PORT:-}"
+TUIC_PORT="${TUIC_PORT:-}"
+SNELL_PORT="${SNELL_PORT:-}"
+SNELL_V6_PORT="${SNELL_V6_PORT:-}"
+# ==============================================================================
 
 VLESS_UUID=""
 REALITY_PRIVATE=""
@@ -20,9 +27,6 @@ REALITY_SHORT_ID=""
 TROJAN_PASSWORD=""
 HY2_PASSWORD=""
 SNELL_PSK=""
-
-SNI=www.tencentcloud.com
-REALITY_DEST_PORT=443
 
 BASE_DIR="${SING_BOX_HOME:-/root/sing-box}"
 BIN_PATH="$BASE_DIR/sing-box"
@@ -58,30 +62,16 @@ usage() {
   cat << 'USAGE'
 sing-box installer for Alpine Linux and Debian/Ubuntu.
 
-Installs sing-box and starts seven inbounds with random credentials:
-  * VLESS + REALITY (XTLS-Vision)  on 39001/tcp
-  * Trojan                         on 39002/tcp
-  * AnyTLS                         on 39003/tcp
-  * Hysteria2                      on 39004/udp
-  * TUIC v5                        on 39005/udp
-  * Snell v5 (v4 compatible)       on 39006/tcp
-  * Snell v6                       on 39007/tcp
+Installs sing-box and starts seven inbounds with manual configuration.
 
 Usage:
-  ./sb.sh             install (or repair) and start
+  ./sb.sh             install (or repair) and start (interactive setup)
   ./sb.sh --show      print the share links for an existing install
   ./sb.sh --uninstall stop and remove everything this script created
 
-Always installs the latest stable sing-box release; re-running upgrades it.
-REALITY and Trojan use www.tencentcloud.com as the SNI.
-Trojan, AnyTLS, Hysteria2 and TUIC use a TLS certificate; clients skip verification where needed.
-Each install generates fresh credentials; update clients after re-running.
-
-State lives under /root/sing-box (binary, config, logs, pids).
-Set SING_BOX_HOME to put it somewhere else.
-
-Supports both systemd (Debian/Ubuntu) and OpenRC (Alpine); falls back to a
-background process when neither init is present (e.g. inside a container).
+Environment variables for non-interactive automation:
+  SNI, REALITY_DEST_PORT, VLESS_PORT, TROJAN_PORT, ANYTLS_PORT,
+  HY2_PORT, TUIC_PORT, SNELL_PORT, SNELL_V6_PORT
 USAGE
 }
 
@@ -250,6 +240,70 @@ ensure_dirs() {
   chmod 0755 "$BASE_DIR"
 }
 
+prompt_config() {
+  [ -t 0 ] || {
+    [ -n "$SNI" ] || die "SNI is required (set SNI env or run interactively)"
+    [ -n "$REALITY_DEST_PORT" ] || die "REALITY_DEST_PORT is required"
+    [ -n "$VLESS_PORT" ] || die "VLESS_PORT is required"
+    [ -n "$TROJAN_PORT" ] || die "TROJAN_PORT is required"
+    [ -n "$ANYTLS_PORT" ] || die "ANYTLS_PORT is required"
+    [ -n "$HY2_PORT" ] || die "HY2_PORT is required"
+    [ -n "$TUIC_PORT" ] || die "TUIC_PORT is required"
+    [ -n "$SNELL_PORT" ] || die "SNELL_PORT is required"
+    [ -n "$SNELL_V6_PORT" ] || die "SNELL_V6_PORT is required"
+    return 0
+  }
+
+  printf '\n%s=== 请手动输入所有配置参数 ===%s\n' "$C_BOLD" "$C_RESET"
+  
+  while [ -z "$SNI" ]; do
+    printf '请输入 SNI 域名 (例如: www.bing.com): '
+    read -r SNI
+  done
+
+  while [ -z "$REALITY_DEST_PORT" ]; do
+    printf '请输入 REALITY 回源目标端口 (例如: 443): '
+    read -r REALITY_DEST_PORT
+  done
+
+  while [ -z "$VLESS_PORT" ]; do
+    printf 'VLESS + REALITY 监听端口: '
+    read -r VLESS_PORT
+  done
+
+  while [ -z "$TROJAN_PORT" ]; do
+    printf 'Trojan 监听端口: '
+    read -r TROJAN_PORT
+  done
+
+  while [ -z "$ANYTLS_PORT" ]; do
+    printf 'AnyTLS 监听端口: '
+    read -r ANYTLS_PORT
+  done
+
+  while [ -z "$HY2_PORT" ]; do
+    printf 'Hysteria2 监听端口: '
+    read -r HY2_PORT
+  done
+
+  while [ -z "$TUIC_PORT" ]; do
+    printf 'TUIC v5 监听端口: '
+    read -r TUIC_PORT
+  done
+
+  while [ -z "$SNELL_PORT" ]; do
+    printf 'Snell v5 监听端口: '
+    read -r SNELL_PORT
+  done
+
+  while [ -z "$SNELL_V6_PORT" ]; do
+    printf 'Snell v6 监听端口: '
+    read -r SNELL_V6_PORT
+  done
+  
+  printf '%s=============================%s\n\n' "$C_BOLD" "$C_RESET"
+}
+
 generate_credentials() {
   log "generating fresh credentials"
   VLESS_UUID=$("$BIN_PATH" generate uuid) || die "could not generate VLESS UUID"
@@ -308,7 +362,7 @@ write_config() (
           "enabled": true,
           "handshake": {
             "server": "$SNI",
-            "server_port": 443
+            "server_port": $REALITY_DEST_PORT
           },
           "private_key": "$REALITY_PRIVATE",
           "short_id": [
@@ -438,20 +492,30 @@ CONFIG
 
 load_credentials() {
   command -v jq >/dev/null 2>&1 || die "jq is required to read the saved configuration"
+  
   client_settings=$(jq -er '
     (.inbounds[] | select(.type == "vless")) as $vless |
     (.inbounds[] | select(.type == "trojan")) as $trojan |
+    (.inbounds[] | select(.type == "anytls")) as $anytls |
     (.inbounds[] | select(.type == "hysteria2")) as $hy2 |
-    (.inbounds[] | select(.type == "snell" and .version == 5)) as $snell |
+    (.inbounds[] | select(.type == "tuic")) as $tuic |
+    (.inbounds[] | select(.type == "snell" and .version == 5)) as $snell5 |
+    (.inbounds[] | select(.type == "snell" and .version == 6)) as $snell6 |
     [$vless.users[0].uuid, $vless.tls.server_name,
-     $vless.tls.reality.short_id[0], $trojan.users[0].password, $hy2.users[0].password, $snell.psk] |
+     $vless.tls.reality.short_id[0], $trojan.users[0].password, $hy2.users[0].password, $snell5.psk,
+     ($vless.listen_port|tostring), ($trojan.listen_port|tostring), ($anytls.listen_port|tostring),
+     ($hy2.listen_port|tostring), ($tuic.listen_port|tostring), ($snell5.listen_port|tostring), ($snell6.listen_port|tostring)] |
     if all(.[]; type == "string" and length > 0) then @tsv
     else error("missing client settings") end
   ' "$CONF_FILE") || die "could not read credentials from $CONF_FILE"
+  
   [ -n "$client_settings" ] || die "no client credentials found in $CONF_FILE"
-  IFS="$(printf '\t')" read -r VLESS_UUID SNI REALITY_SHORT_ID TROJAN_PASSWORD HY2_PASSWORD SNELL_PSK << SETTINGS
+  
+  IFS="$(printf '\t')" read -r VLESS_UUID SNI REALITY_SHORT_ID TROJAN_PASSWORD HY2_PASSWORD SNELL_PSK \
+    VLESS_PORT TROJAN_PORT ANYTLS_PORT HY2_PORT TUIC_PORT SNELL_PORT SNELL_V6_PORT << SETTINGS
 $client_settings
 SETTINGS
+
   [ -s "$REALITY_PUBLIC_FILE" ] || die "missing $REALITY_PUBLIC_FILE; re-run sb.sh to generate credentials"
   REALITY_PUBLIC=$(cat "$REALITY_PUBLIC_FILE")
 }
@@ -781,6 +845,10 @@ do_install() {
   ensure_deps
   ensure_binary
   ensure_dirs
+  
+  # 引导手动输入各项端口、SNI 及回源端口
+  prompt_config
+
   generate_credentials
 
   log "writing configuration to $CONF_FILE"
