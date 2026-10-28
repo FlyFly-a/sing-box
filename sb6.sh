@@ -62,7 +62,7 @@ usage() {
   cat << 'USAGE'
 sing-box installer for Alpine Linux and Debian/Ubuntu.
 
-Installs sing-box and starts seven inbounds with manual configuration and geo-naming.
+Installs sing-box and starts seven inbounds with manual configuration.
 
 Usage:
   ./sb.sh             install (or repair) and start (interactive setup)
@@ -739,12 +739,6 @@ public_ipv6() {
   return 1
 }
 
-# 自动通过 IP 获取国家/地区代码并转换为大写（如 HK, US, SG）
-get_geo_prefix() {
-  geo=$(curl -fsS --connect-timeout 5 "http://ip-api.com/line/?fields=countryCode" 2>/dev/null | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]') || geo=""
-  [ -n "$geo" ] && [ "${#geo}" -eq 2 ] && printf '%s' "$geo" || printf 'VPS'
-}
-
 print_section() {
   section_head="-- $1  $2 "
   section_fill=$((56 - ${#section_head}))
@@ -761,12 +755,8 @@ show_links() {
   case "$URI_SERVER" in
     *:*) URI_SERVER="[$URI_SERVER]" ;;
   esac
-
-  # 获取大写的国家码前缀（如 HK, US 等）
-  NODE_PREFIX=$(get_geo_prefix)
-
   printf '\n%s========================================================%s\n' "$C_BOLD" "$C_RESET"
-  printf '%s  sing-box is running (Location Tag: %s)%s\n' "$C_BOLD" "$NODE_PREFIX" "$C_RESET"
+  printf '%s  sing-box is running%s\n' "$C_BOLD" "$C_RESET"
   printf '%s========================================================%s\n' "$C_BOLD" "$C_RESET"
   if [ -n "$SERVER_IPV4" ]; then
     printf '  ipv4        %s\n' "$SERVER_IPV4"
@@ -776,46 +766,46 @@ show_links() {
   fi
 
   print_section "VLESS + REALITY" "$VLESS_PORT/tcp"
-  printf '  vless://%s@%s:%s?encryption=none&flow=xtls-rprx-vision&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp#%s-reality\n' \
-    "$VLESS_UUID" "$URI_SERVER" "$VLESS_PORT" "$SNI" "$REALITY_PUBLIC" "$REALITY_SHORT_ID" "$NODE_PREFIX"
+  printf '  vless://%s@%s:%s?encryption=none&flow=xtls-rprx-vision&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp#reality\n' \
+    "$VLESS_UUID" "$URI_SERVER" "$VLESS_PORT" "$SNI" "$REALITY_PUBLIC" "$REALITY_SHORT_ID"
   printf '  uuid        %s\n' "$VLESS_UUID"
   printf '  public key  %s\n' "$REALITY_PUBLIC"
   printf '  short id    %s\n' "$REALITY_SHORT_ID"
   printf '  sni         %s\n' "$SNI"
 
   print_section "Trojan" "$TROJAN_PORT/tcp"
-  printf '  trojan://%s@%s:%s?security=tls&sni=%s&allow_insecure=1#%s-trojan\n' \
-    "$TROJAN_PASSWORD" "$URI_SERVER" "$TROJAN_PORT" "$SNI" "$NODE_PREFIX"
+  printf '  trojan://%s@%s:%s?security=tls&sni=%s&allow_insecure=1#trojan\n' \
+    "$TROJAN_PASSWORD" "$URI_SERVER" "$TROJAN_PORT" "$SNI"
   printf '  password    %s\n' "$TROJAN_PASSWORD"
   printf '  sni         %s\n' "$SNI"
 
   print_section "AnyTLS" "$ANYTLS_PORT/tcp"
-  printf '  anytls://%s@%s:%s?sni=%s&insecure=1#%s-anytls\n' \
-    "$TROJAN_PASSWORD" "$URI_SERVER" "$ANYTLS_PORT" "$SNI" "$NODE_PREFIX"
+  printf '  anytls://%s@%s:%s?sni=%s&insecure=1#anytls\n' \
+    "$TROJAN_PASSWORD" "$URI_SERVER" "$ANYTLS_PORT" "$SNI"
   printf '  password    %s\n' "$TROJAN_PASSWORD"
   printf '  sni         %s\n' "$SNI"
 
   print_section "Hysteria2" "$HY2_PORT/udp"
-  printf '  hysteria2://%s@%s:%s?sni=%s&alpn=h3&insecure=1#%s-hy2\n' \
-    "$HY2_PASSWORD" "$URI_SERVER" "$HY2_PORT" "$SNI" "$NODE_PREFIX"
+  printf '  hysteria2://%s@%s:%s?sni=%s&alpn=h3&insecure=1#hysteria2\n' \
+    "$HY2_PASSWORD" "$URI_SERVER" "$HY2_PORT" "$SNI"
   printf '  password    %s\n' "$HY2_PASSWORD"
   printf '  sni         %s\n' "$SNI"
 
   print_section "TUIC v5" "$TUIC_PORT/udp"
-  printf '  tuic://%s:%s@%s:%s?sni=%s&alpn=h3&congestion_control=bbr&udp_relay_mode=native&allow_insecure=1#%s-tuic\n' \
-    "$VLESS_UUID" "$HY2_PASSWORD" "$URI_SERVER" "$TUIC_PORT" "$SNI" "$NODE_PREFIX"
+  printf '  tuic://%s:%s@%s:%s?sni=%s&alpn=h3&congestion_control=bbr&udp_relay_mode=native&allow_insecure=1#tuic\n' \
+    "$VLESS_UUID" "$HY2_PASSWORD" "$URI_SERVER" "$TUIC_PORT" "$SNI"
   printf '  uuid        %s\n' "$VLESS_UUID"
   printf '  password    %s\n' "$HY2_PASSWORD"
   printf '  sni         %s\n' "$SNI"
 
   print_section "Snell v5" "$SNELL_PORT/tcp"
-  printf '  snell-v5 = snell, %s, %s, psk=%s, version=4, reuse=true, name=%s-snell5\n' \
-    "$SERVER" "$SNELL_PORT" "$SNELL_PSK" "$NODE_PREFIX"
+  printf '  snell-v5 = snell, %s, %s, psk=%s, version=4, reuse=true\n' \
+    "$SERVER" "$SNELL_PORT" "$SNELL_PSK"
   printf '  psk         %s\n' "$SNELL_PSK"
 
   print_section "Snell v6" "$SNELL_V6_PORT/tcp"
-  printf '  snell-v6 = snell, %s, %s, psk=%s, version=6, reuse=true, name=%s-snell6\n' \
-    "$SERVER" "$SNELL_V6_PORT" "$SNELL_PSK" "$NODE_PREFIX"
+  printf '  snell-v6 = snell, %s, %s, psk=%s, version=6, reuse=true\n' \
+    "$SERVER" "$SNELL_V6_PORT" "$SNELL_PSK"
   printf '  psk         %s\n' "$SNELL_PSK"
 
   printf '\n%s========================================================%s\n\n' "$C_BOLD" "$C_RESET"
