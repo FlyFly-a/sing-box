@@ -6,7 +6,7 @@ SING_BOX_VERSION=""
 SERVICE_NAME=sing-box
 
 # ==============================================================================
-# 用户自定义配置
+# 用户自定义配置（无硬编码默认值，需通过交互或环境变量传入）
 # ==============================================================================
 SNI="${SNI:-}"
 REALITY_DEST_PORT="${REALITY_DEST_PORT:-}"
@@ -254,54 +254,60 @@ prompt_config() {
     return 0
   }
 
-  printf '\n%s=== 请手动输入所有配置参数 ===%s\n' "$C_BOLD" "$C_RESET"
+  printf '\n%s========================================================%s\n' "$C_BOLD" "$C_RESET"
+  printf '%s  第一部分：REALITY 伪装目标与回源设置 (Target & Handshake)%s\n' "$C_BOLD" "$C_RESET"
+  printf '%s========================================================%s\n' "$C_BOLD" "$C_RESET"
   
   while [ -z "$SNI" ]; do
-    printf '请输入 SNI 域名 (例如: www.bing.com): '
+    printf '  -> 请输入伪装目标域名 [SNI] (例如: www.bing.com): '
     read -r SNI
   done
 
   while [ -z "$REALITY_DEST_PORT" ]; do
-    printf '请输入 REALITY 回源目标端口 (例如: 443): '
+    printf '  -> 请输入目标服务器的回源端口 [Handshake Port] (例如: 443): '
     read -r REALITY_DEST_PORT
   done
 
+  printf '\n%s========================================================%s\n' "$C_BOLD" "$C_RESET"
+  printf '%s  第二部分：本地代理协议监听端口设置 (Inbound Ports)%s\n' "$C_BOLD" "$C_RESET"
+  printf '%s========================================================%s\n' "$C_BOLD" "$C_RESET"
+
   while [ -z "$VLESS_PORT" ]; do
-    printf 'VLESS + REALITY 监听端口: '
+    printf '  -> VLESS + REALITY 监听端口: '
     read -r VLESS_PORT
   done
 
   while [ -z "$TROJAN_PORT" ]; do
-    printf 'Trojan 监听端口: '
+    printf '  -> Trojan 监听端口: '
     read -r TROJAN_PORT
   done
 
   while [ -z "$ANYTLS_PORT" ]; do
-    printf 'AnyTLS 监听端口: '
+    printf '  -> AnyTLS 监听端口: '
     read -r ANYTLS_PORT
   done
 
   while [ -z "$HY2_PORT" ]; do
-    printf 'Hysteria2 监听端口: '
+    printf '  -> Hysteria2 监听端口: '
     read -r HY2_PORT
   done
 
   while [ -z "$TUIC_PORT" ]; do
-    printf 'TUIC v5 监听端口: '
+    printf '  -> TUIC v5 监听端口: '
     read -r TUIC_PORT
   done
 
   while [ -z "$SNELL_PORT" ]; do
-    printf 'Snell v5 监听端口: '
+    printf '  -> Snell v5 监听端口: '
     read -r SNELL_PORT
   done
 
   while [ -z "$SNELL_V6_PORT" ]; do
-    printf 'Snell v6 监听端口: '
+    printf '  -> Snell v6 监听端口: '
     read -r SNELL_V6_PORT
   done
   
-  printf '%s=============================%s\n\n' "$C_BOLD" "$C_RESET"
+  printf '%s========================================================%s\n\n' "$C_BOLD" "$C_RESET"
 }
 
 generate_credentials() {
