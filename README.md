@@ -7,9 +7,12 @@ Install the latest stable sing-box on Debian, Ubuntu, or Alpine. Supports system
 | VLESS + REALITY + XTLS Vision | 39001/tcp |
 | Trojan | 39002/tcp |
 | AnyTLS | 39003/tcp |
-| Snell v5 (v4-compatible clients) | 39004/tcp |
-| Snell v6 | 39005/tcp |
+| Hysteria 2 | 39004/udp |
+| TUIC v5 | 39005/udp |
+| Snell v5 (v4-compatible clients) | 39006/tcp |
+| Snell v6 | 39007/tcp |
 
+REALITY, Hysteria2, and TUIC all use `www.tencentcloud.com` as the SNI. Hysteria2 and TUIC use a self-signed certificate, so clients skip certificate verification.
 
 ## Install
 
