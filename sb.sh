@@ -889,4 +889,4 @@ case "$MODE" in
     show_links
     ;;
   uninstall) uninstall ;;
-es
+esac
