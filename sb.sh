@@ -445,7 +445,7 @@ write_config() (
       ],
       "congestion_control": "bbr",
       "tls": {
-        "enabled": "true",
+        "enabled": true,
         "server_name": "$SNI",
         "alpn": [
           "h3"
@@ -889,4 +889,4 @@ case "$MODE" in
     show_links
     ;;
   uninstall) uninstall ;;
-esac
+es:
