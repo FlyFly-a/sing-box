@@ -242,7 +242,6 @@ ensure_dirs() {
 
 prompt_config() {
   [ -t 0 ] || {
-    # 非交互式检查所有必要变量是否均已通过环境变量提供
     [ -n "$SNI" ] || die "SNI is required (set SNI env or run interactively)"
     [ -n "$REALITY_DEST_PORT" ] || die "REALITY_DEST_PORT is required"
     [ -n "$VLESS_PORT" ] || die "VLESS_PORT is required"
@@ -446,7 +445,7 @@ write_config() (
       ],
       "congestion_control": "bbr",
       "tls": {
-        "enabled": true,
+        "enabled": "true",
         "server_name": "$SNI",
         "alpn": [
           "h3"
@@ -740,6 +739,15 @@ public_ipv6() {
   return 1
 }
 
+get_country_code() {
+  cc=$(curl -fsS --connect-timeout 5 "http://ip-api.com/json/?fields=countryCode" 2>/dev/null | jq -r '.countryCode // empty' 2>/dev/null || true)
+  if [ -n "$cc" ]; then
+    printf '%s' "$cc" | tr '[:lower:]' '[:upper:]'
+  else
+    printf 'US'
+  fi
+}
+
 print_section() {
   section_head="-- $1  $2 "
   section_fill=$((56 - ${#section_head}))
@@ -756,6 +764,9 @@ show_links() {
   case "$URI_SERVER" in
     *:*) URI_SERVER="[$URI_SERVER]" ;;
   esac
+  
+  CC=$(get_country_code)
+
   printf '\n%s========================================================%s\n' "$C_BOLD" "$C_RESET"
   printf '%s  sing-box is running%s\n' "$C_BOLD" "$C_RESET"
   printf '%s========================================================%s\n' "$C_BOLD" "$C_RESET"
@@ -765,48 +776,49 @@ show_links() {
   if [ -n "$SERVER_IPV6" ]; then
     printf '  ipv6        %s\n' "$SERVER_IPV6"
   fi
+  printf '  country     %s\n' "$CC"
 
   print_section "VLESS + REALITY" "$VLESS_PORT/tcp"
-  printf '  vless://%s@%s:%s?encryption=none&flow=xtls-rprx-vision&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp#reality\n' \
-    "$VLESS_UUID" "$URI_SERVER" "$VLESS_PORT" "$SNI" "$REALITY_PUBLIC" "$REALITY_SHORT_ID"
+  printf '  vless://%s@%s:%s?encryption=none&flow=xtls-rprx-vision&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp#%s-Reality\n' \
+    "$VLESS_UUID" "$URI_SERVER" "$VLESS_PORT" "$SNI" "$REALITY_PUBLIC" "$REALITY_SHORT_ID" "$CC"
   printf '  uuid        %s\n' "$VLESS_UUID"
   printf '  public key  %s\n' "$REALITY_PUBLIC"
   printf '  short id    %s\n' "$REALITY_SHORT_ID"
   printf '  sni         %s\n' "$SNI"
 
   print_section "Trojan" "$TROJAN_PORT/tcp"
-  printf '  trojan://%s@%s:%s?security=tls&sni=%s&allow_insecure=1#trojan\n' \
-    "$TROJAN_PASSWORD" "$URI_SERVER" "$TROJAN_PORT" "$SNI"
+  printf '  trojan://%s@%s:%s?security=tls&sni=%s&allow_insecure=1#%s-Trojan\n' \
+    "$TROJAN_PASSWORD" "$URI_SERVER" "$TROJAN_PORT" "$SNI" "$CC"
   printf '  password    %s\n' "$TROJAN_PASSWORD"
   printf '  sni         %s\n' "$SNI"
 
   print_section "AnyTLS" "$ANYTLS_PORT/tcp"
-  printf '  anytls://%s@%s:%s?sni=%s&insecure=1#anytls\n' \
-    "$TROJAN_PASSWORD" "$URI_SERVER" "$ANYTLS_PORT" "$SNI"
+  printf '  anytls://%s@%s:%s?sni=%s&insecure=1#%s-Anytls\n' \
+    "$TROJAN_PASSWORD" "$URI_SERVER" "$ANYTLS_PORT" "$SNI" "$CC"
   printf '  password    %s\n' "$TROJAN_PASSWORD"
   printf '  sni         %s\n' "$SNI"
 
   print_section "Hysteria2" "$HY2_PORT/udp"
-  printf '  hysteria2://%s@%s:%s?sni=%s&alpn=h3&insecure=1#hysteria2\n' \
-    "$HY2_PASSWORD" "$URI_SERVER" "$HY2_PORT" "$SNI"
+  printf '  hysteria2://%s@%s:%s?sni=%s&alpn=h3&insecure=1#%s-Hysteria2\n' \
+    "$HY2_PASSWORD" "$URI_SERVER" "$HY2_PORT" "$SNI" "$CC"
   printf '  password    %s\n' "$HY2_PASSWORD"
   printf '  sni         %s\n' "$SNI"
 
   print_section "TUIC v5" "$TUIC_PORT/udp"
-  printf '  tuic://%s:%s@%s:%s?sni=%s&alpn=h3&congestion_control=bbr&udp_relay_mode=native&allow_insecure=1#tuic\n' \
-    "$VLESS_UUID" "$HY2_PASSWORD" "$URI_SERVER" "$TUIC_PORT" "$SNI"
+  printf '  tuic://%s:%s@%s:%s?sni=%s&alpn=h3&congestion_control=bbr&udp_relay_mode=native&allow_insecure=1#%s-Tuic\n' \
+    "$VLESS_UUID" "$HY2_PASSWORD" "$URI_SERVER" "$TUIC_PORT" "$SNI" "$CC"
   printf '  uuid        %s\n' "$VLESS_UUID"
   printf '  password    %s\n' "$HY2_PASSWORD"
   printf '  sni         %s\n' "$SNI"
 
   print_section "Snell v5" "$SNELL_PORT/tcp"
-  printf '  snell-v5 = snell, %s, %s, psk=%s, version=4, reuse=true\n' \
-    "$SERVER" "$SNELL_PORT" "$SNELL_PSK"
+  printf '  %s-Snell-v5 = snell, %s, %s, psk=%s, version=4, reuse=true\n' \
+    "$CC" "$SERVER" "$SNELL_PORT" "$SNELL_PSK"
   printf '  psk         %s\n' "$SNELL_PSK"
 
   print_section "Snell v6" "$SNELL_V6_PORT/tcp"
-  printf '  snell-v6 = snell, %s, %s, psk=%s, version=6, reuse=true\n' \
-    "$SERVER" "$SNELL_V6_PORT" "$SNELL_PSK"
+  printf '  %s-Snell-v6 = snell, %s, %s, psk=%s, version=6, reuse=true\n' \
+    "$CC" "$SERVER" "$SNELL_V6_PORT" "$SNELL_PSK"
   printf '  psk         %s\n' "$SNELL_PSK"
 
   printf '\n%s========================================================%s\n\n' "$C_BOLD" "$C_RESET"
@@ -847,7 +859,6 @@ do_install() {
   ensure_binary
   ensure_dirs
   
-  # 引导手动输入各项端口、SNI 及回源端口
   prompt_config
 
   generate_credentials
