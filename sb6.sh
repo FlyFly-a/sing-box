@@ -663,7 +663,7 @@ show_links() {
   printf '  sni         %s\n' "$SNI"
 
   print_section "AnyTLS" "$ANYTLS_PORT/tcp"
-  printf '  anytls://%s@%s:%s?security=tls&sni=%s&allow_insecure=1#anytls\n' \
+  printf '  anytls://%s@%s:%s?sni=%s&insecure=1#anytls\n' \
     "$TROJAN_PASSWORD" "$URI_SERVER" "$ANYTLS_PORT" "$SNI"
   printf '  password    %s\n' "$TROJAN_PASSWORD"
   printf '  sni         %s\n' "$SNI"
