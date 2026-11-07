@@ -1,3 +1,4 @@
+cat << 'EOF' > sb.sh
 #!/bin/sh
 
 set -eu
@@ -366,4 +367,12 @@ show_menu() {
   esac
 }
 
-show_menu
+# 根据输入的参数判断，没有参数直接进入菜单
+case "${1:-}" in
+  --install)   do_install ;;
+  --show)      show_links ;;
+  --uninstall) uninstall ;;
+  *)           show_menu ;;
+esac
+EOF
+sh sb.sh
