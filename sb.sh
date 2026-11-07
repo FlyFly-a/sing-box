@@ -1,7 +1,5 @@
 cat << 'EOF' > sb.sh
-#!/bin/sh
-
-set -eu
+#!/bin/bash
 
 SING_BOX_VERSION=""
 SERVICE_NAME=sing-box
@@ -53,60 +51,33 @@ REALITY_PUBLIC_FILE="$CONF_DIR/reality-public.key"
 TLS_CERT_FILE="$CONF_DIR/tls-cert.pem"
 TLS_KEY_FILE="$CONF_DIR/tls-key.pem"
 
-GO_MEMORY_LIMIT=48MiB
-TCP_BUFFER_MAX=4194304
-
-SERVER=""
-SERVER_IPV4=""
-SERVER_IPV6=""
-
-if [ -t 1 ] && [ "${NO_COLOR:-}" = "" ]; then
-  C_RESET=$(printf '\033[0m'); C_OK=$(printf '\033[32m')
-  C_ERR=$(printf '\033[31m'); C_INFO=$(printf '\033[36m'); C_BOLD=$(printf '\033[1m')
-else
-  C_RESET=''; C_OK=''; C_ERR=''; C_INFO=''; C_BOLD=''
-fi
-
-log()  { printf '%s==>%s %s\n' "$C_INFO" "$C_RESET" "$*"; }
-ok()   { printf '%s  ok%s %s\n' "$C_OK" "$C_RESET" "$*"; }
-warn() { printf '%s  !!%s %s\n' "$C_ERR" "$C_RESET" "$*" >&2; }
-die()  { printf '%serror:%s %s\n' "$C_ERR" "$C_RESET" "$*" >&2; exit 1; }
+log()  { echo -e "\033[36m==>\033[0m $*"; }
+ok()   { echo -e "\033[32m  ok\033[0m $*"; }
+warn() { echo -e "\033[31m  !!\033[0m $*" >&2; }
+die()  { echo -e "\033[31merror:\033[0m $*" >&2; exit 1; }
 
 DISTRO=unknown
 if [ -r /etc/os-release ]; then
-  DISTRO=$(. /etc/os-release && printf '%s' "${ID:-unknown}")
+  DISTRO=$(. /etc/os-release && echo "${ID:-unknown}")
 fi
-case "$DISTRO" in
-  alpine)                 DISTRO_FAMILY=alpine ;;
-  debian|ubuntu|raspbian) DISTRO_FAMILY=debian ;;
-  *)
-    if command -v apk >/dev/null 2>&1; then DISTRO_FAMILY=alpine
-    elif command -v apt-get >/dev/null 2>&1; then DISTRO_FAMILY=debian
-    else DISTRO_FAMILY=unknown; fi
-    ;;
-esac
 
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
   INIT=systemd
-elif command -v rc-update >/dev/null 2>&1 && [ -d /etc/init.d ]; then
-  INIT=openrc
 else
   INIT=none
 fi
 
-install_deps() (
+install_deps() {
   log "installing dependencies"
-  if [ "$DISTRO_FAMILY" = alpine ]; then
-    apk add --no-cache ca-certificates curl openssl jq >/dev/null
-  elif [ "$DISTRO_FAMILY" = debian ]; then
+  if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq >/dev/null
     apt-get install -y -qq ca-certificates curl openssl jq >/dev/null
-  else
-    die "install curl, openssl and jq manually"
+  elif command -v apk >/dev/null 2>&1; then
+    apk add --no-cache ca-certificates curl openssl jq >/dev/null
   fi
   ok "dependencies installed"
-)
+}
 
 ensure_deps() {
   for c in curl openssl jq; do
@@ -154,8 +125,8 @@ generate_credentials() {
   log "generating fresh credentials"
   VLESS_UUID=$("$BIN_PATH" generate uuid)
   reality_keypair=$("$BIN_PATH" generate reality-keypair)
-  REALITY_PRIVATE=$(printf '%s\n' "$reality_keypair" | awk '/^PrivateKey:/{print $2}')
-  REALITY_PUBLIC=$(printf '%s\n' "$reality_keypair" | awk '/^PublicKey:/{print $2}')
+  REALITY_PRIVATE=$(echo "$reality_keypair" | awk '/^PrivateKey:/{print $2}')
+  REALITY_PUBLIC=$(echo "$reality_keypair" | awk '/^PublicKey:/{print $2}')
   REALITY_SHORT_ID=$(openssl rand -hex 8)
   HY2_PASSWORD=$(openssl rand -hex 16)
   SNELL_PSK=$(openssl rand -hex 32)
@@ -167,7 +138,7 @@ generate_credentials() {
   SOCKS5_PASS="$(openssl rand -hex 6)"
 }
 
-write_config() (
+write_config() {
   umask 077
   touch "$CONF_FILE" "$REALITY_PUBLIC_FILE" "$TLS_CERT_FILE" "$TLS_KEY_FILE"
   chmod 600 "$CONF_FILE" "$REALITY_PUBLIC_FILE" "$TLS_CERT_FILE" "$TLS_KEY_FILE"
@@ -175,7 +146,7 @@ write_config() (
     -keyout "$TLS_KEY_FILE" -out "$TLS_CERT_FILE" -days 3650 \
     -subj "/CN=$SNI" -addext "subjectAltName=DNS:$SNI" >/dev/null 2>&1
 
-  jq . > "$CONF_FILE" << CONFIG
+  cat << CONFIG > "$CONF_FILE"
 {
   "log": { "level": "info", "timestamp": true },
   "dns": {
@@ -253,8 +224,8 @@ write_config() (
   ]
 }
 CONFIG
-  printf '%s\n' "$REALITY_PUBLIC" > "$REALITY_PUBLIC_FILE"
-)
+  echo "$REALITY_PUBLIC" > "$REALITY_PUBLIC_FILE"
+}
 
 public_ip() {
   curl -4 -fsS --connect-timeout 3 https://api.ipify.org 2>/dev/null || echo ""
@@ -264,24 +235,24 @@ show_links() {
   SERVER=$(public_ip)
   [ -n "$SERVER" ] || SERVER="<your-server-ip>"
   
-  printf '\n========================================================\n'
-  printf '  Custom Port sing-box Share Links\n'
-  printf '========================================================\n'
-  printf '  VLESS-Reality       : %s\n' "$VLESS_PORT"
-  printf '  VLESS-TLS           : %s\n' "$VLESS_TLS_PORT"
-  printf '  VLESS-WS-TLS        : %s\n' "$VLESS_WS_PORT"
-  printf '  VMess-TCP-TLS       : %s\n' "$VMESS_PORT"
-  printf '  Trojan-TLS          : %s\n' "$TROJAN_TLS_PORT"
-  printf '  Trojan-WS-TLS       : %s\n' "$TROJAN_WS_PORT"
-  printf '  Hysteria2-TLS       : %s (UDP)\n' "$HY2_PORT"
-  printf '  TUIC-TLS            : %s (UDP)\n' "$TUIC_PORT"
-  printf '  Shadowsocks         : %s\n' "$SS_PORT"
-  printf '  SS-2022-128         : %s\n' "$SS2022_128_PORT"
-  printf '  SS-2022-256         : %s\n' "$SS2022_256_PORT"
-  printf '  SOCKS5              : %s\n' "$SOCKS5_PORT"
-  printf '  Snell v5            : %s\n' "$SNELL_PORT"
-  printf '  Snell v6            : %s\n' "$SNELL_V6_PORT"
-  printf '========================================================\n\n'
+  echo "========================================================"
+  echo "  Custom Port sing-box Share Links"
+  echo "========================================================"
+  echo "  VLESS-Reality       : $VLESS_PORT"
+  echo "  VLESS-TLS           : $VLESS_TLS_PORT"
+  echo "  VLESS-WS-TLS        : $VLESS_WS_PORT"
+  echo "  VMess-TCP-TLS       : $VMESS_PORT"
+  echo "  Trojan-TLS          : $TROJAN_TLS_PORT"
+  echo "  Trojan-WS-TLS       : $TROJAN_WS_PORT"
+  echo "  Hysteria2-TLS       : $HY2_PORT (UDP)"
+  echo "  TUIC-TLS            : $TUIC_PORT (UDP)"
+  echo "  Shadowsocks         : $SS_PORT"
+  echo "  SS-2022-128         : $SS2022_128_PORT"
+  echo "  SS-2022-256         : $SS2022_256_PORT"
+  echo "  SOCKS5              : $SOCKS5_PORT"
+  echo "  Snell v5            : $SNELL_PORT"
+  echo "  Snell v6            : $SNELL_V6_PORT"
+  echo "========================================================"
 }
 
 stop_existing() {
@@ -292,7 +263,7 @@ stop_existing() {
 
 start_service() {
   if [ "$INIT" = systemd ]; then
-    cat > "/etc/systemd/system/${SERVICE_NAME}.service" << UNIT
+    cat << UNIT > "/etc/systemd/system/${SERVICE_NAME}.service"
 [Unit]
 Description=sing-box service
 After=network.target
@@ -322,7 +293,7 @@ uninstall() {
 }
 
 do_install() {
-  [ "$(id -u)" -eq 0 ] || die "must run as root (try: sudo sh $0)"
+  [ "$(id -u)" -eq 0 ] || die "must run as root (try: sudo bash sb.sh)"
   ensure_deps
   ensure_binary
   ensure_dirs
@@ -336,43 +307,45 @@ do_install() {
 
 # ==================== 【交互式选择菜单】 ====================
 show_menu() {
-  clear
-  printf '%s========================================================%s\n' "$C_BOLD" "$C_RESET"
-  printf '%s       sing-box 多协议管理脚本 (14协议)                 %s\n' "$C_BOLD" "$C_RESET"
-  printf '%s========================================================%s\n' "$C_BOLD" "$C_RESET"
-  printf '  1. 安装 / 更新 / 重置配置 并启动服务\n'
-  printf '  2. 查看当前节点的分享链接\n'
-  printf '  3. 卸载并删除 sing-box 服务\n'
-  printf '  0. 退出脚本\n'
-  printf '%s========================================================%s\n' "$C_BOLD" "$C_RESET"
-  printf '请输入选择 [0-3]: '
-  read -r choice
-  case "$choice" in
-    1)
-      do_install
-      ;;
-    2)
-      [ -f "$CONF_FILE" ] || { warn "尚未安装或找不到配置文件！"; exit 1; }
-      show_links
-      ;;
-    3)
-      uninstall
-      ;;
-    0)
-      exit 0
-      ;;
-    *)
-      warn "无效的选择，请重新运行脚本！"
-      ;;
-  esac
+  while true; do
+    clear
+    echo "========================================================"
+    echo "       sing-box 多协议管理脚本 (14协议)                 "
+    echo "========================================================"
+    echo "  1. 安装 / 更新 / 重置配置 并启动服务"
+    echo "  2. 查看当前节点的分享链接"
+    echo "  3. 卸载并删除 sing-box 服务"
+    echo "  0. 退出脚本"
+    echo "========================================================"
+    read -p "请输入选择 [0-3]: " choice
+    case "$choice" in
+      1)
+        do_install
+        read -p "按回车键继续..."
+        ;;
+      2)
+        if [ -f "$CONF_FILE" ]; then
+          show_links
+        else
+          warn "尚未安装或找不到配置文件！"
+        fi
+        read -p "按回车键继续..."
+        ;;
+      3)
+        uninstall
+        read -p "按回车键继续..."
+        ;;
+      0)
+        exit 0
+        ;;
+      *)
+        warn "无效的选择，请重新输入！"
+        sleep 1
+        ;;
+    esac
+  done
 }
 
-# 根据输入的参数判断，没有参数直接进入菜单
-case "${1:-}" in
-  --install)   do_install ;;
-  --show)      show_links ;;
-  --uninstall) uninstall ;;
-  *)           show_menu ;;
-esac
+show_menu
 EOF
-sh sb.sh
+bash sb.sh
