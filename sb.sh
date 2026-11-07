@@ -1,4 +1,3 @@
-cat << 'EOF' > sb.sh
 #!/bin/sh
 
 set -eu
@@ -71,20 +70,6 @@ log()  { printf '%s==>%s %s\n' "$C_INFO" "$C_RESET" "$*"; }
 ok()   { printf '%s  ok%s %s\n' "$C_OK" "$C_RESET" "$*"; }
 warn() { printf '%s  !!%s %s\n' "$C_ERR" "$C_RESET" "$*" >&2; }
 die()  { printf '%serror:%s %s\n' "$C_ERR" "$C_RESET" "$*" >&2; exit 1; }
-
-MODE=install
-case "${1:-}" in
-  ""|--install)         MODE=install ;;
-  --show)               MODE=show ;;
-  --uninstall|--remove) MODE=uninstall ;;
-  -h|--help)            exit 0 ;;
-  *) die "unknown option: $1" ;;
-esac
-
-case "$MODE" in
-  show) ;;
-  *) [ "$(id -u)" -eq 0 ] || die "must run as root (try: sudo $0)" ;;
-esac
 
 DISTRO=unknown
 if [ -r /etc/os-release ]; then
@@ -185,7 +170,6 @@ write_config() (
   umask 077
   touch "$CONF_FILE" "$REALITY_PUBLIC_FILE" "$TLS_CERT_FILE" "$TLS_KEY_FILE"
   chmod 600 "$CONF_FILE" "$REALITY_PUBLIC_FILE" "$TLS_CERT_FILE" "$TLS_KEY_FILE"
-  # 加入了 -batch 参数避免交互询问
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -batch \
     -keyout "$TLS_KEY_FILE" -out "$TLS_CERT_FILE" -days 3650 \
     -subj "/CN=$SNI" -addext "subjectAltName=DNS:$SNI" >/dev/null 2>&1
@@ -280,7 +264,7 @@ show_links() {
   [ -n "$SERVER" ] || SERVER="<your-server-ip>"
   
   printf '\n========================================================\n'
-  printf '  Custom Port sing-box Share Links (Fixed)\n'
+  printf '  Custom Port sing-box Share Links\n'
   printf '========================================================\n'
   printf '  VLESS-Reality       : %s\n' "$VLESS_PORT"
   printf '  VLESS-TLS           : %s\n' "$VLESS_TLS_PORT"
@@ -327,23 +311,59 @@ UNIT
   else
     nohup "$BIN_PATH" run -c "$CONF_FILE" >>"$LOG_FILE" 2>&1 &
   fi
+  ok "sing-box service started successfully"
 }
 
-case "$MODE" in
-  install)
-    ensure_deps
-    ensure_binary
-    ensure_dirs
-    generate_credentials
-    write_config
-    "$BIN_PATH" check -c "$CONF_FILE" || die "config check failed"
-    stop_existing
-    start_service
-    show_links
-    ;;
-  show)
-    show_links
-    ;;
-esac
-EOF
-sh sb.sh
+uninstall() {
+  stop_existing
+  rm -rf "$CONF_DIR" "$LOG_DIR" "$BIN_PATH" "$BASE_DIR"
+  ok "uninstalled completely"
+}
+
+do_install() {
+  [ "$(id -u)" -eq 0 ] || die "must run as root (try: sudo sh $0)"
+  ensure_deps
+  ensure_binary
+  ensure_dirs
+  generate_credentials
+  write_config
+  "$BIN_PATH" check -c "$CONF_FILE" || die "config check failed"
+  stop_existing
+  start_service
+  show_links
+}
+
+# ==================== 【交互式选择菜单】 ====================
+show_menu() {
+  clear
+  printf '%s========================================================%s\n' "$C_BOLD" "$C_RESET"
+  printf '%s       sing-box 多协议管理脚本 (14协议)                 %s\n' "$C_BOLD" "$C_RESET"
+  printf '%s========================================================%s\n' "$C_BOLD" "$C_RESET"
+  printf '  1. 安装 / 更新 / 重置配置 并启动服务\n'
+  printf '  2. 查看当前节点的分享链接\n'
+  printf '  3. 卸载并删除 sing-box 服务\n'
+  printf '  0. 退出脚本\n'
+  printf '%s========================================================%s\n' "$C_BOLD" "$C_RESET"
+  printf '请输入选择 [0-3]: '
+  read -r choice
+  case "$choice" in
+    1)
+      do_install
+      ;;
+    2)
+      [ -f "$CONF_FILE" ] || { warn "尚未安装或找不到配置文件！"; exit 1; }
+      show_links
+      ;;
+    3)
+      uninstall
+      ;;
+    0)
+      exit 0
+      ;;
+    *)
+      warn "无效的选择，请重新运行脚本！"
+      ;;
+  esac
+}
+
+show_menu
