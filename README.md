@@ -94,7 +94,27 @@ dist/
 
 ## 支持的节点协议
 
-VLESS-REALITY、VLESS-Vision-TLS、VLESS-TLS、VLESS-gRPC-TLS、VLESS-WS-TLS、VLESS-HTTPUpgrade-TLS、Hysteria2-QUIC、TUIC-QUIC、Shadowsocks-AEAD、Shadowsocks-2022-128、Shadowsocks-2022-256、Shadowsocks-ShadowTLS、Trojan-TLS、Trojan-gRPC-TLS、Trojan-WS-TLS、VMess-TCP、VMess-TCP-TLS、VMess-WS-TLS、VMess-gRPC-TLS、AnyTLS-TLS、SOCKS5。
+| VLESS-REALITY| 
+| VLESS-Vision-TLS| 
+| VLESS-TLS| 
+| VLESS-gRPC-TLS| 
+| VLESS-WS-TLS| 
+| VLESS-HTTPUpgrade-TLS| 
+| Hysteria2-QUIC| 
+| TUIC-QUIC| 
+| Shadowsocks-AEAD| 
+| Shadowsocks-2022-128| 
+| Shadowsocks-2022-256| 
+| Shadowsocks-ShadowTLS| 
+| Trojan-TLS| 
+| Trojan-gRPC-TLS| 
+| Trojan-WS-TLS| 
+| VMess-TCP| 
+| VMess-TCP-TLS| 
+| VMess-WS-TLS| 
+| VMess-gRPC-TLS| 
+| AnyTLS-TLS| 
+| SOCKS5| 
 
 ## 数据目录
 
