@@ -29,7 +29,9 @@ curl -fsSL https://raw.githubusercontent.com/FlyFly-a/sing-box/main/dist/sing-bo
 && sb
 ```
 执行后会进入管理菜单。以后随时用下面命令重新打开：
+```bash
 sb
+```
 这样脚本会保留在服务器上，方便后续增删节点、改端口、看日志。
 
 ### 命令行参数
