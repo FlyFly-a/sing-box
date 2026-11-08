@@ -7,7 +7,7 @@
 ### 方式一：单文件版（推荐部署）
 
 ```bash
-bash dist/sing-box-oneclick.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/FlyFly-a/sing-box/main/dist/sing-box-oneclick.sh)
 ```
 
 单文件版可以直接上传到服务器运行，无需携带 `lib/` 目录。
