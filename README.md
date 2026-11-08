@@ -53,7 +53,7 @@ bash sing-box.sh
 也可以直接运行已构建的单文件版：
 
 ```bash
-bash dist/sing-box-oneclick.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/FlyFly-a/sing-box/main/dist/sing-box-oneclick.sh)
 ```
 
 ### 命令行参数
