@@ -15,7 +15,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/FlyFly-a/sing-box/main/dist/
 ### 方式二：模块化源码版
 
 ```bash
-bash sing-box.sh
+git clone https://github.com/FlyFly-a/sing-box.git /opt/sing-box-manager
+bash /opt/sing-box-manager/sing-box.sh
 ```
 
 模块化入口会按 `lib/modules.list` 的顺序加载模块，适合阅读、修改和扩展。
