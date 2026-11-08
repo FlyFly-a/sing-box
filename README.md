@@ -21,6 +21,17 @@ bash /opt/sing-box-manager/sing-box.sh
 
 模块化入口会按 `lib/modules.list` 的顺序加载模块，适合阅读、修改和扩展。
 
+### 方式三：安装为常驻菜单命令
+```bash
+curl -fsSL https://raw.githubusercontent.com/FlyFly-a/sing-box/main/dist/sing-box-oneclick.sh \  
+-o /usr/local/bin/sb \  
+&& chmod +x /usr/local/bin/sb \  
+&& sb
+```
+执行后会进入管理菜单。以后随时用下面命令重新打开：
+sb
+这样脚本会保留在服务器上，方便后续增删节点、改端口、看日志。
+
 ### 命令行参数
 
 ```bash
