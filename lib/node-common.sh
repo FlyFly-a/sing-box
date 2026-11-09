@@ -126,7 +126,7 @@ port_in_use() {
     if [ -n "${EXCLUDE_TAG:-}" ] && [ "$base" = "$EXCLUDE_TAG" ]; then
       continue
     fi
-    type=$(jq -r 'if type=="array" then .[-1].type else .type end' "$f" 2>/dev/null || true)
+    type=$(jq -r '.type' "$f" 2>/dev/null || true)
     case "$type" in
       hysteria2|tuic) t="udp" ;;
       *)              t="tcp" ;;
@@ -134,9 +134,7 @@ port_in_use() {
     if [ -n "$transport" ] && [ "$t" != "$transport" ]; then
       continue
     fi
-    if jq -e --argjson p "$port" \
-      'if type=="array" then any(.[]; .listen_port == $p) else .listen_port == $p end' \
-      "$f" >/dev/null 2>&1; then
+    if jq -e --argjson p "$port" '.listen_port == $p' "$f" >/dev/null 2>&1; then
       shopt -u nullglob
       return 0
     fi
@@ -188,7 +186,7 @@ meta_get() {
 }
 
 node_obj() {
-  jq -c 'if type=="array" then .[-1] else . end' "$NODE_DIR/$1.json" 2>/dev/null
+  jq -c . "$NODE_DIR/$1.json" 2>/dev/null
 }
 
 n_get() {
@@ -206,8 +204,8 @@ list_nodes_table() {
     tag=$(basename "$f" .json)
     proto=$(meta_get "$tag" proto)
     display=$(proto_meta_display "$proto")
-    port=$(jq -r 'if type=="array" then .[-1].listen_port else .listen_port end' "$f" 2>/dev/null || echo '-')
-    domain=$(jq -r 'if type=="array" then (.[-1].tls.server_name // .[-1].handshake.server // "-") else (.tls.server_name // .handshake.server // "-") end' "$f" 2>/dev/null || echo '-')
+    port=$(jq -r '.listen_port' "$f" 2>/dev/null || echo '-')
+    domain=$(jq -r '.tls.server_name // .handshake.server // "-"' "$f" 2>/dev/null || echo '-')
     printf '%-4s %-28s %-24s %-8s %s\n' "$i" "$tag" "${display:-未知}" "$port" "$domain"
   done
   shopt -u nullglob
@@ -260,6 +258,7 @@ save_node() {
     printf 'created=%s\n' "$(date '+%F %T')"
   } > "$NODE_DIR/$tag.meta"
   chmod 600 "$NODE_DIR/$tag.meta"
+  CREATED_TAGS+=("$tag")
   info "节点 [$tag] 已保存"
   if [ "${BATCH_MODE:-0}" = "1" ]; then
     return 0
@@ -270,10 +269,6 @@ save_node() {
 # ================================================================
 #  证书处理
 # ================================================================
-cert_file_base() {
-  printf '%s' "${1//\*/_}" | tr -c 'A-Za-z0-9._-' '_'
-}
-
 generate_selfsigned_cert() {
   local domain=$1 base=$2 crt key cnf
   crt="$CERT_DIR/$base.crt"
@@ -308,50 +303,49 @@ EOF
     CERT_FILE=$crt
     KEY_FILE=$key
     CERT_INSECURE=1
-    info "自签证书已生成: $crt"
     return 0
   fi
   error "自签证书生成失败"
   return 1
 }
 
-ensure_cert() {
-  local domain=$1 base crt key c k
-  base=$(cert_file_base "$domain")
+load_active_cert() {
+  local ref="$CERT_DIR/.active_cert" base crt key
+  [ -s "$ref" ] || return 1
+  base=$(head -n1 "$ref" 2>/dev/null || true)
+  [ -n "$base" ] || return 1
+  case "$base" in */*|..*) return 1 ;; esac
   crt="$CERT_DIR/$base.crt"
   key="$CERT_DIR/$base.key"
-  if [ -s "$crt" ] && [ -s "$key" ]; then
-    CERT_FILE=$crt
-    KEY_FILE=$key
-    if [ -f "$CERT_DIR/$base.selfsigned" ]; then
-      CERT_INSECURE=1
-    else
-      CERT_INSECURE=0
-    fi
-    info "使用已有证书: $crt"
+  [ -s "$crt" ] && [ -s "$key" ] || return 1
+  CERT_FILE=$crt
+  KEY_FILE=$key
+  if [ -f "$CERT_DIR/$base.selfsigned" ]; then
+    CERT_INSECURE=1
+  else
+    CERT_INSECURE=0
+  fi
+  return 0
+}
+
+ensure_cert() {
+  local ref="$CERT_DIR/.active_cert" domain=$1 base crt key
+  if load_active_cert; then
     return 0
   fi
-  if [ "${BATCH_MODE:-0}" = "1" ]; then
-    generate_selfsigned_cert "$domain" "$base"
-    return $?
-  fi
-  warn "未找到域名 $domain 对应的证书"
-  if confirm "是否生成自签证书? 自用可以，对外服务建议上传真实证书"; then
-    generate_selfsigned_cert "$domain" "$base"
-    return $?
-  fi
   while true; do
-    ask c "证书 crt 文件路径" ""
-    ask k "私钥 key 文件路径" ""
-    if [ -s "$c" ] && [ -s "$k" ]; then
-      CERT_FILE=$c
-      KEY_FILE=$k
-      CERT_INSECURE=0
-      return 0
-    fi
-    warn "证书或私钥文件不存在"
-    confirm "是否重新输入?" || return 1
+    base="cert-$(gen_hex 8)"
+    crt="$CERT_DIR/$base.crt"
+    key="$CERT_DIR/$base.key"
+    [ ! -e "$crt" ] && [ ! -e "$key" ] && break
   done
+  generate_selfsigned_cert "$domain" "$base" || return 1
+  if ! printf '%s\n' "$base" > "$ref"; then
+    error "写入证书索引失败: $ref"
+    return 1
+  fi
+  chmod 600 "$ref" 2>/dev/null || true
+  return 0
 }
 
 prompt_domain_cert() {
@@ -386,6 +380,9 @@ tls_cert_json() {
   local domain=$1
   shift
   local alpn
+  if [ -z "$CERT_FILE" ] || [ -z "$KEY_FILE" ]; then
+    ensure_cert "$domain" || return 1
+  fi
   alpn=$(printf '%s\n' "$@" | jq -R . | jq -s .)
   jq -n --arg sni "$domain" --arg crt "$CERT_FILE" --arg key "$KEY_FILE" --argjson alpn "$alpn" \
     '{enabled:true,server_name:$sni,alpn:$alpn,certificate_path:$crt,key_path:$key}'

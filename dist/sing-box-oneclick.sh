@@ -2,7 +2,7 @@
 # ================================================================
 #  sing-box 一键部署管理脚本（单文件构建版）
 #  由 build.sh 自动生成，请勿直接编辑；源码见 lib/ 目录
-#  构建时间: 2026-11-09 20:43:03
+#  构建时间: 2026-11-09 21:58:23
 # ================================================================
 
 # ================================================================
@@ -54,6 +54,7 @@ BATCH_REALITY_HSPORT=""
 AUTO_TAG_DEFAULT=""
 PROTOCOL_PICKS=()
 PROTOCOL_INVALID=""
+CREATED_TAGS=()
 BATCH_PORT=""
 BATCH_PORT_LIST=()
 BATCH_PORT_TYPES=()
@@ -474,20 +475,14 @@ rebuild_config() {
 
   shopt -s nullglob
   for f in "$NODE_DIR"/*.json; do
-    if ! jq --slurpfile inc "$f" '
-      .inbounds += (if (($inc|length) == 1 and (($inc[0]|type) == "array"))
-                    then $inc[0] else $inc end)
-    ' "$tmp" > "$tmp.next"; then
+    if ! jq --slurpfile inc "$f" '.inbounds += $inc' "$tmp" > "$tmp.next"; then
       rc=1; break
     fi
     mv -f "$tmp.next" "$tmp"
   done
   if [ "$rc" -eq 0 ]; then
     for f in "$OUT_DIR"/*.json; do
-      if ! jq --slurpfile inc "$f" '
-        .outbounds += (if (($inc|length) == 1 and (($inc[0]|type) == "array"))
-                       then $inc[0] else $inc end)
-      ' "$tmp" > "$tmp.next"; then
+      if ! jq --slurpfile inc "$f" '.outbounds += $inc' "$tmp" > "$tmp.next"; then
         rc=1; break
       fi
       mv -f "$tmp.next" "$tmp"
@@ -1016,7 +1011,7 @@ port_in_use() {
     if [ -n "${EXCLUDE_TAG:-}" ] && [ "$base" = "$EXCLUDE_TAG" ]; then
       continue
     fi
-    type=$(jq -r 'if type=="array" then .[-1].type else .type end' "$f" 2>/dev/null || true)
+    type=$(jq -r '.type' "$f" 2>/dev/null || true)
     case "$type" in
       hysteria2|tuic) t="udp" ;;
       *)              t="tcp" ;;
@@ -1024,9 +1019,7 @@ port_in_use() {
     if [ -n "$transport" ] && [ "$t" != "$transport" ]; then
       continue
     fi
-    if jq -e --argjson p "$port" \
-      'if type=="array" then any(.[]; .listen_port == $p) else .listen_port == $p end' \
-      "$f" >/dev/null 2>&1; then
+    if jq -e --argjson p "$port" '.listen_port == $p' "$f" >/dev/null 2>&1; then
       shopt -u nullglob
       return 0
     fi
@@ -1078,7 +1071,7 @@ meta_get() {
 }
 
 node_obj() {
-  jq -c 'if type=="array" then .[-1] else . end' "$NODE_DIR/$1.json" 2>/dev/null
+  jq -c . "$NODE_DIR/$1.json" 2>/dev/null
 }
 
 n_get() {
@@ -1096,8 +1089,8 @@ list_nodes_table() {
     tag=$(basename "$f" .json)
     proto=$(meta_get "$tag" proto)
     display=$(proto_meta_display "$proto")
-    port=$(jq -r 'if type=="array" then .[-1].listen_port else .listen_port end' "$f" 2>/dev/null || echo '-')
-    domain=$(jq -r 'if type=="array" then (.[-1].tls.server_name // .[-1].handshake.server // "-") else (.tls.server_name // .handshake.server // "-") end' "$f" 2>/dev/null || echo '-')
+    port=$(jq -r '.listen_port' "$f" 2>/dev/null || echo '-')
+    domain=$(jq -r '.tls.server_name // .handshake.server // "-"' "$f" 2>/dev/null || echo '-')
     printf '%-4s %-28s %-24s %-8s %s\n' "$i" "$tag" "${display:-未知}" "$port" "$domain"
   done
   shopt -u nullglob
@@ -1150,6 +1143,7 @@ save_node() {
     printf 'created=%s\n' "$(date '+%F %T')"
   } > "$NODE_DIR/$tag.meta"
   chmod 600 "$NODE_DIR/$tag.meta"
+  CREATED_TAGS+=("$tag")
   info "节点 [$tag] 已保存"
   if [ "${BATCH_MODE:-0}" = "1" ]; then
     return 0
@@ -1160,10 +1154,6 @@ save_node() {
 # ================================================================
 #  证书处理
 # ================================================================
-cert_file_base() {
-  printf '%s' "${1//\*/_}" | tr -c 'A-Za-z0-9._-' '_'
-}
-
 generate_selfsigned_cert() {
   local domain=$1 base=$2 crt key cnf
   crt="$CERT_DIR/$base.crt"
@@ -1198,50 +1188,49 @@ EOF
     CERT_FILE=$crt
     KEY_FILE=$key
     CERT_INSECURE=1
-    info "自签证书已生成: $crt"
     return 0
   fi
   error "自签证书生成失败"
   return 1
 }
 
-ensure_cert() {
-  local domain=$1 base crt key c k
-  base=$(cert_file_base "$domain")
+load_active_cert() {
+  local ref="$CERT_DIR/.active_cert" base crt key
+  [ -s "$ref" ] || return 1
+  base=$(head -n1 "$ref" 2>/dev/null || true)
+  [ -n "$base" ] || return 1
+  case "$base" in */*|..*) return 1 ;; esac
   crt="$CERT_DIR/$base.crt"
   key="$CERT_DIR/$base.key"
-  if [ -s "$crt" ] && [ -s "$key" ]; then
-    CERT_FILE=$crt
-    KEY_FILE=$key
-    if [ -f "$CERT_DIR/$base.selfsigned" ]; then
-      CERT_INSECURE=1
-    else
-      CERT_INSECURE=0
-    fi
-    info "使用已有证书: $crt"
+  [ -s "$crt" ] && [ -s "$key" ] || return 1
+  CERT_FILE=$crt
+  KEY_FILE=$key
+  if [ -f "$CERT_DIR/$base.selfsigned" ]; then
+    CERT_INSECURE=1
+  else
+    CERT_INSECURE=0
+  fi
+  return 0
+}
+
+ensure_cert() {
+  local ref="$CERT_DIR/.active_cert" domain=$1 base crt key
+  if load_active_cert; then
     return 0
   fi
-  if [ "${BATCH_MODE:-0}" = "1" ]; then
-    generate_selfsigned_cert "$domain" "$base"
-    return $?
-  fi
-  warn "未找到域名 $domain 对应的证书"
-  if confirm "是否生成自签证书? 自用可以，对外服务建议上传真实证书"; then
-    generate_selfsigned_cert "$domain" "$base"
-    return $?
-  fi
   while true; do
-    ask c "证书 crt 文件路径" ""
-    ask k "私钥 key 文件路径" ""
-    if [ -s "$c" ] && [ -s "$k" ]; then
-      CERT_FILE=$c
-      KEY_FILE=$k
-      CERT_INSECURE=0
-      return 0
-    fi
-    warn "证书或私钥文件不存在"
-    confirm "是否重新输入?" || return 1
+    base="cert-$(gen_hex 8)"
+    crt="$CERT_DIR/$base.crt"
+    key="$CERT_DIR/$base.key"
+    [ ! -e "$crt" ] && [ ! -e "$key" ] && break
   done
+  generate_selfsigned_cert "$domain" "$base" || return 1
+  if ! printf '%s\n' "$base" > "$ref"; then
+    error "写入证书索引失败: $ref"
+    return 1
+  fi
+  chmod 600 "$ref" 2>/dev/null || true
+  return 0
 }
 
 prompt_domain_cert() {
@@ -1276,6 +1265,9 @@ tls_cert_json() {
   local domain=$1
   shift
   local alpn
+  if [ -z "$CERT_FILE" ] || [ -z "$KEY_FILE" ]; then
+    ensure_cert "$domain" || return 1
+  fi
   alpn=$(printf '%s\n' "$@" | jq -R . | jq -s .)
   jq -n --arg sni "$domain" --arg crt "$CERT_FILE" --arg key "$KEY_FILE" --argjson alpn "$alpn" \
     '{enabled:true,server_name:$sni,alpn:$alpn,certificate_path:$crt,key_path:$key}'
@@ -1777,7 +1769,7 @@ print_node_link() {
     warn "未能获取公网 IP，请手动替换链接中的服务器地址"
   fi
 
-  obj=$(jq -c 'if type=="array" then .[-1] else . end' "$f")
+  obj=$(jq -c . "$f")
   port=$(jq -r '.listen_port // empty' <<<"$obj")
   domain=$(jq -r '.tls.server_name // empty' <<<"$obj")
   uuid=$(jq -r '.users[0].uuid // empty' <<<"$obj")
@@ -1866,6 +1858,21 @@ print_node_link() {
   printf '%s\n' "$link"
 }
 
+print_created_links() {
+  local tag display i=0
+  [ ${#CREATED_TAGS[@]} -gt 0 ] || return 0
+  printf '\n%s\n' "================ 新节点分享链接 ================"
+  for tag in "${CREATED_TAGS[@]}"; do
+    [ -f "$NODE_DIR/$tag.json" ] || continue
+    i=$((i + 1))
+    display=$(proto_meta_display "$(meta_get "$tag" proto)")
+    printf '\n[%s] %s  (%s)\n' "$i" "$tag" "$display"
+    printf '%s\n' "--------------------------------------------------"
+    print_node_link "$tag"
+  done
+  [ "$i" -gt 0 ] && printf '\n共 %s 个新节点\n' "$i"
+}
+
 show_node_details() {
   local tag=$1 proto
   proto=$(meta_get "$tag" proto)
@@ -1877,9 +1884,6 @@ show_node_details() {
   jq . "$NODE_DIR/$tag.json"
   printf '\n%s\n' "---------- 分享链接 / 客户端配置 ----------"
   print_node_link "$tag"
-  if [ "$(meta_get "$tag" insecure)" = "1" ]; then
-    warn "该节点使用自签证书，客户端需要开启“允许不安全连接”。"
-  fi
 }
 
 view_nodes() {
@@ -2124,6 +2128,7 @@ batch_create_nodes() {
   local p need_cert=0 need_domain=0 has_reality=0 ok=0 fail=0 loc name detected
   local idx=0 transport v
   local -a picks=()
+  CREATED_TAGS=()
 
   if [ "$#" -gt 0 ]; then
     picks=("$@")
@@ -2165,9 +2170,6 @@ batch_create_nodes() {
       info "所选 TLS 节点将共用同一伪装域名"
     else
       info "REALITY 节点将使用该域名作为伪装域名"
-    fi
-    if [ "$need_cert" -eq 1 ]; then
-      info "真实证书请放到 $CERT_DIR/<域名>.crt 和 <域名>.key；找不到时自动生成自签证书"
     fi
     while [ -z "$BATCH_DOMAIN" ]; do
       ask BATCH_DOMAIN "伪装域名" ""
@@ -2274,6 +2276,7 @@ batch_create_nodes() {
 
 menu_add_node() {
   local c rc
+  CREATED_TAGS=()
   printf '%s\n' "------------- 新增节点 -------------"
   print_protocol_menu
   printf '%s\n' "(批量添加请用空格或逗号分隔，例如 1 3 10)"
@@ -2300,6 +2303,8 @@ menu_add_node() {
   else
     batch_create_nodes "${PROTOCOL_PICKS[@]}"
   fi
+  print_created_links
+  CREATED_TAGS=()
   pause
 }
 
@@ -3394,14 +3399,13 @@ show_help() {
      每种协议还会单独询问监听端口，直接回车使用随机监听端口，
      监听端口会自动避开已有节点和本批次内的重复占用。
      国家码查询失败时显示 XX，可直接输入两位国家码。
-  3. TLS 类协议需要域名证书：
-     - 有真实证书时，直接填写 crt 和 key 的绝对路径；
-     - 没有证书时，可让脚本生成自签证书（客户端需允许不安全连接）；
-     - 批量创建找不到证书时会自动生成自签证书，不再额外确认；
-     - 建议使用真实域名并申请 Let's Encrypt 证书，兼容性最好。
+  3. TLS 节点统一自动使用同一个自签证书：
+     - 证书文件名随机生成，保存在 /etc/sing-box/cert/ 下；
+     - 所有需要证书的协议自动复用这一套证书，不再询问证书路径；
+     - 客户端需要开启“允许不安全连接 / allowInsecure”。
   4. 添加完成后，用“运行管理 -> 启动/重启核心”使配置生效。
-  5. 在“查看节点”中复制分享链接或客户端配置到手机/电脑。
-     主菜单选择 5) 分享链接，可一次查看全部节点。
+  5. 节点创建完成后会自动显示新节点的分享链接；
+     也可在“查看节点”中复制，主菜单选择 5) 分享链接可一次查看全部节点。
 
 【协议说明】
   VLESS-Reality-Vision    : 无需证书，Vision + REALITY，推荐优先使用

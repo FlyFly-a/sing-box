@@ -146,6 +146,7 @@ batch_create_nodes() {
   local p need_cert=0 need_domain=0 has_reality=0 ok=0 fail=0 loc name detected
   local idx=0 transport v
   local -a picks=()
+  CREATED_TAGS=()
 
   if [ "$#" -gt 0 ]; then
     picks=("$@")
@@ -187,9 +188,6 @@ batch_create_nodes() {
       info "所选 TLS 节点将共用同一伪装域名"
     else
       info "REALITY 节点将使用该域名作为伪装域名"
-    fi
-    if [ "$need_cert" -eq 1 ]; then
-      info "真实证书请放到 $CERT_DIR/<域名>.crt 和 <域名>.key；找不到时自动生成自签证书"
     fi
     while [ -z "$BATCH_DOMAIN" ]; do
       ask BATCH_DOMAIN "伪装域名" ""
@@ -296,6 +294,7 @@ batch_create_nodes() {
 
 menu_add_node() {
   local c rc
+  CREATED_TAGS=()
   printf '%s\n' "------------- 新增节点 -------------"
   print_protocol_menu
   printf '%s\n' "(批量添加请用空格或逗号分隔，例如 1 3 10)"
@@ -322,6 +321,8 @@ menu_add_node() {
   else
     batch_create_nodes "${PROTOCOL_PICKS[@]}"
   fi
+  print_created_links
+  CREATED_TAGS=()
   pause
 }
 

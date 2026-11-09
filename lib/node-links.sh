@@ -16,7 +16,7 @@ print_node_link() {
     warn "未能获取公网 IP，请手动替换链接中的服务器地址"
   fi
 
-  obj=$(jq -c 'if type=="array" then .[-1] else . end' "$f")
+  obj=$(jq -c . "$f")
   port=$(jq -r '.listen_port // empty' <<<"$obj")
   domain=$(jq -r '.tls.server_name // empty' <<<"$obj")
   uuid=$(jq -r '.users[0].uuid // empty' <<<"$obj")
@@ -105,6 +105,21 @@ print_node_link() {
   printf '%s\n' "$link"
 }
 
+print_created_links() {
+  local tag display i=0
+  [ ${#CREATED_TAGS[@]} -gt 0 ] || return 0
+  printf '\n%s\n' "================ 新节点分享链接 ================"
+  for tag in "${CREATED_TAGS[@]}"; do
+    [ -f "$NODE_DIR/$tag.json" ] || continue
+    i=$((i + 1))
+    display=$(proto_meta_display "$(meta_get "$tag" proto)")
+    printf '\n[%s] %s  (%s)\n' "$i" "$tag" "$display"
+    printf '%s\n' "--------------------------------------------------"
+    print_node_link "$tag"
+  done
+  [ "$i" -gt 0 ] && printf '\n共 %s 个新节点\n' "$i"
+}
+
 show_node_details() {
   local tag=$1 proto
   proto=$(meta_get "$tag" proto)
@@ -116,9 +131,6 @@ show_node_details() {
   jq . "$NODE_DIR/$tag.json"
   printf '\n%s\n' "---------- 分享链接 / 客户端配置 ----------"
   print_node_link "$tag"
-  if [ "$(meta_get "$tag" insecure)" = "1" ]; then
-    warn "该节点使用自签证书，客户端需要开启“允许不安全连接”。"
-  fi
 }
 
 view_nodes() {

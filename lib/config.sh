@@ -29,20 +29,14 @@ rebuild_config() {
 
   shopt -s nullglob
   for f in "$NODE_DIR"/*.json; do
-    if ! jq --slurpfile inc "$f" '
-      .inbounds += (if (($inc|length) == 1 and (($inc[0]|type) == "array"))
-                    then $inc[0] else $inc end)
-    ' "$tmp" > "$tmp.next"; then
+    if ! jq --slurpfile inc "$f" '.inbounds += $inc' "$tmp" > "$tmp.next"; then
       rc=1; break
     fi
     mv -f "$tmp.next" "$tmp"
   done
   if [ "$rc" -eq 0 ]; then
     for f in "$OUT_DIR"/*.json; do
-      if ! jq --slurpfile inc "$f" '
-        .outbounds += (if (($inc|length) == 1 and (($inc[0]|type) == "array"))
-                       then $inc[0] else $inc end)
-      ' "$tmp" > "$tmp.next"; then
+      if ! jq --slurpfile inc "$f" '.outbounds += $inc' "$tmp" > "$tmp.next"; then
         rc=1; break
       fi
       mv -f "$tmp.next" "$tmp"
