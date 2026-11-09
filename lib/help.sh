@@ -86,8 +86,8 @@ show_help() {
      建议选择支持 TLS 1.3 的境外网站，如 www.microsoft.com。
      回源端口默认 443，会单独询问，可自定义。
   4. AnyTLS 报错：升级核心到 1.12 或更高版本。
-  5. Snell 报错：升级核心到 1.14 或更高版本；分享链接格式:
-     snell://密钥@服务器:端口?version=6&mode=default#节点名
+  5. Snell 报错：升级核心到 1.14 或更高版本；分享页会输出 snell:// URI 和 Surge 格式。
+     Sub-Store 请使用 Surge 格式，并在输出 sing-box 时加 includeUnsupportedProxy=true。
   6. Shadowsocks 2022 报错：密码必须是 16 或 32 字节的 Base64 密钥。
   7. 修改配置后未生效：执行“重启核心”。
   8. 节点分流：出站管理 -> 更改出站，可设置默认出站，也可为指定节点或协议单独绑定出站。

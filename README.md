@@ -190,9 +190,11 @@ bash build.sh
 - 批量创建会查询公网 IP 国家码；如国家码不准，可在“使用帮助”中刷新缓存。
 - 出站列表中的 `direct` 是内置直连，仅用于切换默认出站，无需重复新增。
 - AnyTLS 需要 sing-box 1.12 及以上版本。
-- Snell-v6 需要 sing-box 1.14 及以上版本，无需证书；分享链接格式：
-  `snell://<psk>@<服务器>:<端口>?version=6&mode=default#<节点名>`。
-  sing-box 出站使用 `reuse=false`；Snell v6 固定使用 `default` 模式。
+- Snell-v6 需要 sing-box 1.14 及以上版本，无需证书；分享页会同时输出：
+  - `snell://<psk>@<服务器>:<端口>?version=6&mode=default#<节点名>`
+  - `节点名 = snell, 服务器, 端口, psk=密钥, version=6, mode=default, reuse=false`
+- Sub-Store 目前不支持 `snell://` 作为输入，请把第二行 Surge 格式加入 Sub-Store 本地节点，
+  输出 sing-box 时使用 `target=sing-box&includeUnsupportedProxy=true`。
 - Shadowsocks-2022 的密码必须是 16 或 32 字节 Base64 密钥。
 - 核心优先使用官方 musl 静态版，Alpine 和旧 glibc 系统无需额外安装 `gcompat`。
 - Alpine 极简系统需要 bash 和 curl，可先执行 `apk add --no-cache bash curl`。

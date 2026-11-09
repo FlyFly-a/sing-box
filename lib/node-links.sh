@@ -31,6 +31,9 @@ print_node_link() {
     psk=$(jq -r '.psk // empty' <<<"$obj")
     link="snell://$(urlenc "$psk")@${ip}:${port}?version=6&mode=default#${tagurl}"
     printf '%s\n' "$link"
+    printf '\n%s\n' "Sub-Store / Surge:"
+    printf '%s = snell, %s, %s, psk=%s, version=6, mode=default, reuse=false\n' \
+      "$tag" "$ip" "$port" "$psk"
     return 0
   fi
 
