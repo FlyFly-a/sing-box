@@ -9,7 +9,8 @@ node-vless.sh
 node-quic.sh
 node-ss.sh
 node-trojan-vmess.sh
-node-misc.sh
+node-anytls-socks5.sh
+node-snell.sh
 node-links.sh
 node-menu.sh
 outbound-common.sh

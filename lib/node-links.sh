@@ -2,8 +2,8 @@
 #  节点查看 / 分享链接
 # ================================================================
 print_node_link() {
-  local tag=$1 proto ip port f obj domain uuid pass method path svc pbk sid insecure
-  local link userinfo payload net tlsf tlsq tagurl ssmethod sspass stpass hs inner outer client
+  local tag=$1 proto ip port f obj domain uuid pass method path pbk sid insecure
+  local link userinfo payload tlsq tagurl psk mode client
   proto=$(meta_get "$tag" proto)
   ip=$(get_server_ip)
   insecure=$(meta_get "$tag" insecure)
@@ -16,28 +16,6 @@ print_node_link() {
     warn "未能获取公网 IP，请手动替换链接中的服务器地址"
   fi
 
-  if [ "$proto" = "shadowtls" ]; then
-    inner=$(jq -c '.[0]' "$f")
-    outer=$(jq -c '.[1]' "$f")
-    ssmethod=$(jq -r '.method // empty' <<<"$inner")
-    sspass=$(jq -r '.password // empty' <<<"$inner")
-    stpass=$(jq -r '.users[0].password // empty' <<<"$outer")
-    hs=$(jq -r '.handshake.server // empty' <<<"$outer")
-    port=$(jq -r '.listen_port' <<<"$outer")
-    client=$(jq -n --arg ip "$ip" --argjson port "$port" --arg method "$ssmethod" \
-      --arg sspass "$sspass" --arg stpass "$stpass" --arg hs "$hs" '
-      {outbounds:[
-        {type:"shadowsocks",tag:"proxy",server:"127.0.0.1",server_port:1080,
-         method:$method,password:$sspass,detour:"shadowtls-out"},
-        {type:"shadowtls",tag:"shadowtls-out",server:$ip,server_port:$port,version:3,
-         password:$stpass,
-         tls:{enabled:true,server_name:$hs,utls:{enabled:true,fingerprint:"chrome"}}}
-      ]}')
-    warn "ShadowTLS 没有通用的分享链接，请使用以下 sing-box 客户端出站配置："
-    printf '%s\n' "$client" | jq .
-    return 0
-  fi
-
   obj=$(jq -c 'if type=="array" then .[-1] else . end' "$f")
   port=$(jq -r '.listen_port // empty' <<<"$obj")
   domain=$(jq -r '.tls.server_name // empty' <<<"$obj")
@@ -45,10 +23,30 @@ print_node_link() {
   pass=$(jq -r '.users[0].password // .password // empty' <<<"$obj")
   method=$(jq -r '.method // empty' <<<"$obj")
   path=$(jq -r '.transport.path // empty' <<<"$obj")
-  svc=$(jq -r '.transport.service_name // empty' <<<"$obj")
   pbk=$(meta_get "$tag" pbk)
   sid=$(jq -r '.tls.reality.short_id[0] // empty' <<<"$obj")
   tagurl=$(urlenc "$tag")
+
+  if [ "$proto" = "snell-v6" ]; then
+    psk=$(jq -r '.psk // empty' <<<"$obj")
+    mode=$(jq -r '.mode // "default"' <<<"$obj")
+    client=$(jq -n --arg tag "$tag" --arg ip "$ip" --argjson port "$port" \
+      --arg psk "$psk" '
+      {type:"snell",tag:$tag,server:$ip,server_port:$port,
+       version:6,psk:$psk,reuse:true}')
+    info "Snell 没有通用分享链接，请使用以下 Surge 配置或 sing-box 出站配置："
+    if [ "$mode" = "default" ]; then
+      printf '%s = snell, %s, %s, psk=%s, version=6, reuse=true\n' \
+        "$tag" "$ip" "$port" "$psk"
+    else
+      printf '%s = snell, %s, %s, psk=%s, version=6, mode=%s, reuse=true\n' \
+        "$tag" "$ip" "$port" "$psk" "$mode"
+      client=$(jq --arg mode "$mode" '. + {mode:$mode}' <<<"$client")
+    fi
+    printf '\n'
+    printf '%s\n' "$client" | jq .
+    return 0
+  fi
 
   tlsq="security=tls&sni=$(urlenc "$domain")"
   if [ "$insecure" = "1" ]; then
@@ -56,43 +54,28 @@ print_node_link() {
   fi
 
   case "$proto" in
-    vless-reality)
+    vless-reality-vision)
       link="vless://${uuid}@${ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$(urlenc "$domain")&fp=chrome&pbk=${pbk}&sid=${sid}&type=tcp#${tagurl}"
-      ;;
-    vless-vision-tls)
-      link="vless://${uuid}@${ip}:${port}?encryption=none&flow=xtls-rprx-vision&${tlsq}&type=tcp#${tagurl}"
-      ;;
-    vless-tls)
-      link="vless://${uuid}@${ip}:${port}?encryption=none&${tlsq}&type=tcp#${tagurl}"
-      ;;
-    vless-grpc-tls)
-      link="vless://${uuid}@${ip}:${port}?encryption=none&${tlsq}&type=grpc&serviceName=$(urlenc "$svc")#${tagurl}"
       ;;
     vless-ws-tls)
       link="vless://${uuid}@${ip}:${port}?encryption=none&${tlsq}&type=ws&path=$(urlenc "$path")&host=$(urlenc "$domain")#${tagurl}"
       ;;
-    vless-httpupgrade-tls)
-      link="vless://${uuid}@${ip}:${port}?encryption=none&${tlsq}&type=httpupgrade&path=$(urlenc "$path")&host=$(urlenc "$domain")#${tagurl}"
-      ;;
     trojan-tls)
       link="trojan://$(urlenc "$pass")@${ip}:${port}?${tlsq}&type=tcp#${tagurl}"
-      ;;
-    trojan-grpc-tls)
-      link="trojan://$(urlenc "$pass")@${ip}:${port}?${tlsq}&type=grpc&serviceName=$(urlenc "$svc")#${tagurl}"
       ;;
     trojan-ws-tls)
       link="trojan://$(urlenc "$pass")@${ip}:${port}?${tlsq}&type=ws&path=$(urlenc "$path")&host=$(urlenc "$domain")#${tagurl}"
       ;;
-    shadowsocks-aead|shadowsocks-2022-128|shadowsocks-2022-256)
+    shadowsocks-2022)
       userinfo=$(b64url "$method:$pass")
       link="ss://${userinfo}@${ip}:${port}#${tagurl}"
       ;;
-    hysteria2)
+    hysteria2-quic)
       link="hysteria2://$(urlenc "$pass")@${ip}:${port}/?sni=$(urlenc "$domain")"
       [ "$insecure" = "1" ] && link="$link&insecure=1"
       link="$link#${tagurl}"
       ;;
-    tuic)
+    tuic-quic)
       link="tuic://${uuid}:$(urlenc "$pass")@${ip}:${port}?congestion_control=bbr&alpn=h3&sni=$(urlenc "$domain")"
       [ "$insecure" = "1" ] && link="$link&allow_insecure=1"
       link="$link#${tagurl}"
@@ -106,30 +89,11 @@ print_node_link() {
       userinfo=$(b64url "$(jq -r '.users[0].username // empty' <<<"$obj"):$(jq -r '.users[0].password // empty' <<<"$obj")")
       link="socks://${userinfo}@${ip}:${port}#${tagurl}"
       ;;
-    vmess-tcp|vmess-tcp-tls|vmess-ws-tls|vmess-grpc-tls)
-      net="tcp"
-      tlsf=""
-      path=""
-      case "$proto" in
-        vmess-tcp-tls)
-          tlsf="tls"
-          ;;
-        vmess-ws-tls)
-          net="ws"
-          tlsf="tls"
-          path=$(jq -r '.transport.path // empty' <<<"$obj")
-          ;;
-        vmess-grpc-tls)
-          net="grpc"
-          tlsf="tls"
-          path=$(jq -r '.transport.service_name // empty' <<<"$obj")
-          ;;
-      esac
+    vmess-ws-tls)
       payload=$(jq -cn --arg ps "$tag" --arg add "$ip" --argjson port "$port" \
-        --arg id "$uuid" --arg net "$net" --arg host "$domain" --arg path "$path" \
-        --arg tls "$tlsf" --arg sni "$domain" '
+        --arg id "$uuid" --arg host "$domain" --arg path "$path" --arg sni "$domain" '
         {v:"2",ps:$ps,add:$add,port:$port,id:$id,aid:0,scy:"auto",
-         net:$net,type:"none",host:$host,path:$path,tls:$tls,sni:$sni}')
+         net:"ws",type:"none",host:$host,path:$path,tls:"tls",sni:$sni}')
       link="vmess://$(printf '%s' "$payload" | base64 | tr -d '\n')"
       ;;
     *)
@@ -146,7 +110,7 @@ show_node_details() {
   proto=$(meta_get "$tag" proto)
   printf '%s\n' "=============================================="
   printf '节点名称 : %s\n' "$tag"
-  printf '协议类型 : %s\n' "${proto:-未知}"
+  printf '协议类型 : %s\n' "$(proto_meta_display "$proto")"
   printf '配置路径 : %s\n' "$NODE_DIR/$tag.json"
   printf '%s\n' "=============================================="
   jq . "$NODE_DIR/$tag.json"
@@ -231,27 +195,17 @@ edit_node() {
   fi
   EXCLUDE_TAG="$tag"
   case "$proto" in
-    vless-reality)          create_vless_reality "$tag" ;;
-    vless-vision-tls)       create_vless_tls vision "$tag" ;;
-    vless-tls)              create_vless_tls plain "$tag" ;;
-    vless-grpc-tls)         create_vless_grpc "$tag" ;;
-    vless-ws-tls)           create_vless_ws "$tag" ;;
-    vless-httpupgrade-tls)  create_vless_httpupgrade "$tag" ;;
-    hysteria2)              create_hysteria2 "$tag" ;;
-    tuic)                   create_tuic "$tag" ;;
-    shadowsocks-aead)       create_ss aead "$tag" ;;
-    shadowsocks-2022-128)   create_ss 2022-128 "$tag" ;;
-    shadowsocks-2022-256)   create_ss 2022-256 "$tag" ;;
-    shadowtls)              create_ss_shadowtls "$tag" ;;
-    trojan-tls)             create_trojan tcp "$tag" ;;
-    trojan-grpc-tls)        create_trojan grpc "$tag" ;;
-    trojan-ws-tls)          create_trojan ws "$tag" ;;
-    vmess-tcp)              create_vmess 0 tcp "$tag" ;;
-    vmess-tcp-tls)          create_vmess 1 tcp "$tag" ;;
-    vmess-ws-tls)           create_vmess 1 ws "$tag" ;;
-    vmess-grpc-tls)         create_vmess 1 grpc "$tag" ;;
-    anytls-tls)             create_anytls "$tag" ;;
-    socks5)                 create_socks "$tag" ;;
+    vless-reality-vision)  create_vless_reality "$tag" ;;
+    vless-ws-tls)          create_vless_ws "$tag" ;;
+    hysteria2-quic)        create_hysteria2 "$tag" ;;
+    tuic-quic)             create_tuic "$tag" ;;
+    trojan-tls)            create_trojan tcp "$tag" ;;
+    trojan-ws-tls)         create_trojan ws "$tag" ;;
+    anytls-tls)            create_anytls "$tag" ;;
+    shadowsocks-2022)      create_ss2022 "$tag" ;;
+    vmess-ws-tls)          create_vmess "$tag" ;;
+    snell-v6)              create_snell "$tag" ;;
+    socks5)                create_socks5 "$tag" ;;
     *)
       warn "未知协议类型: ${proto:-空}，无法编辑"
       pause
@@ -260,4 +214,3 @@ edit_node() {
   EXCLUDE_TAG=""
   pause
 }
-

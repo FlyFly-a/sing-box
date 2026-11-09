@@ -16,6 +16,7 @@ list_outbounds_table() {
     i=$((i+1))
     tag=$(basename "$f" .json)
     type=$(jq -r '.type // "?"' "$f" 2>/dev/null || echo '?')
+    type=$(outbound_type_display "$type")
     mark=""
     [ "$final" = "$tag" ] && mark="<- 默认"
     printf '%-4s %-26s %-18s %s\n' "$i" "$tag" "$type" "$mark"
@@ -37,6 +38,7 @@ select_outbound() {
     error "序号无效"
     return 1
   fi
+  choice=$((10#$choice))
   idx=$((choice - 1))
   if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#tags[@]} ]; then
     error "序号无效"
@@ -62,13 +64,14 @@ select_custom_outbound() {
   printf '%s\n' "----------------------------------------------"
   for f in "${tags[@]}"; do
     i=$((i+1))
-    printf '%-4s %-26s %s\n' "$i" "$f" "$(jq -r '.type // "?"' "$OUT_DIR/$f.json" 2>/dev/null || echo '?')"
+    printf '%-4s %-26s %s\n' "$i" "$f" "$(outbound_type_display "$(jq -r '.type // "?"' "$OUT_DIR/$f.json" 2>/dev/null || echo '?')")"
   done
   ask choice "请输入序号" ""
   if ! [[ $choice =~ ^[0-9]+$ ]]; then
     error "序号无效"
     return 1
   fi
+  choice=$((10#$choice))
   idx=$((choice - 1))
   if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#tags[@]} ]; then
     error "序号无效"
@@ -160,6 +163,7 @@ select_node_protocol() {
     error "序号无效"
     return 1
   fi
+  choice=$((10#$choice))
   idx=$((choice - 1))
   if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#protos[@]} ]; then
     error "序号无效"
@@ -237,7 +241,7 @@ view_node_routes() {
     return 0
   fi
   final=$(head -n1 "$FINAL_FILE" 2>/dev/null || echo direct)
-  printf '%-4s %-30s %-24s %s\n' "序号" "节点" "协议" "出站"
+  printf '%-4s %s%22s %s%20s %s\n' "序号" "节点名称" "" "协议" "" "出站"
   printf '%s\n' "--------------------------------------------------------------------------"
   shopt -s nullglob
   for f in "$NODE_DIR"/*.json; do
@@ -439,7 +443,8 @@ menu_add_outbound() {
   printf ' 3) Shadowsocks        4) VMess\n'
   printf ' 5) VLESS              6) Trojan\n'
   printf ' 7) Hysteria2          8) TUIC\n'
-  printf ' 9) 自定义 JSON        0) 返回\n'
+  printf ' 9) Snell-v6          10) 自定义 JSON\n'
+  printf ' 0) 返回\n'
   ask c "请选择" ""
   case "$c" in
     1) create_out_socks socks ;;
@@ -448,9 +453,10 @@ menu_add_outbound() {
     4) create_out_vmess ;;
     5) create_out_vless ;;
     6) create_out_trojan ;;
-    7) create_out_hy2 ;;
+    7) create_out_hysteria2 ;;
     8) create_out_tuic ;;
-    9) create_out_custom ;;
+    9) create_out_snell ;;
+    10) create_out_custom ;;
     0) return 0 ;;
     *) warn "无效选项" ;;
   esac

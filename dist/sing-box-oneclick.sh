@@ -2,7 +2,7 @@
 # ================================================================
 #  sing-box 一键部署管理脚本（单文件构建版）
 #  由 build.sh 自动生成，请勿直接编辑；源码见 lib/ 目录
-#  构建时间: 2026-11-09 16:07:32
+#  构建时间: 2026-11-09 20:43:03
 # ================================================================
 
 # ================================================================
@@ -53,6 +53,7 @@ BATCH_REALITY_SNI=""
 BATCH_REALITY_HSPORT=""
 AUTO_TAG_DEFAULT=""
 PROTOCOL_PICKS=()
+PROTOCOL_INVALID=""
 BATCH_PORT=""
 BATCH_PORT_LIST=()
 BATCH_PORT_TYPES=()
@@ -306,7 +307,7 @@ download_file() {
 }
 
 install_core() {
-  local version=${1:-} tmp extract url base_url asset_suffix='' verr
+  local version=${1:-} tmp extract url base_url asset_suffix='' verr old_backup=''
   detect_arch || return 1
   ensure_deps || return 1
   if [ -z "$version" ]; then
@@ -353,16 +354,36 @@ install_core() {
   mkdir -p "$(dirname "$BIN")" 2>/dev/null || true
   cp -f "$extract" "${BIN}.new" || { error "写入核心失败"; rm -rf "$tmp"; return 1; }
   chmod 755 "${BIN}.new"
-  mv -f "${BIN}.new" "$BIN" || { error "替换核心失败"; rm -rf "$tmp"; return 1; }
+  if [ -x "$BIN" ]; then
+    if cp -f "$BIN" "${BIN}.old"; then
+      old_backup="${BIN}.old"
+    else
+      warn "旧核心备份失败，继续安装"
+    fi
+  fi
+  if ! mv -f "${BIN}.new" "$BIN"; then
+    if [ -n "$old_backup" ] && [ -x "$old_backup" ]; then
+      mv -f "$old_backup" "$BIN"
+      warn "已恢复旧核心: $BIN"
+    fi
+    error "替换核心失败"
+    rm -rf "$tmp"
+    return 1
+  fi
   rm -rf "$tmp"
   if ! verr=$("$BIN" version 2>&1); then
     error "核心已下载但无法运行:"
     printf '%s\n' "$verr" >&2
+    if [ -n "$old_backup" ] && [ -x "$old_backup" ]; then
+      mv -f "$old_backup" "$BIN"
+      warn "已恢复旧核心: $BIN"
+    fi
     if command -v apk >/dev/null 2>&1; then
       warn "如确认是 musl 兼容问题，可尝试: apk add --no-cache gcompat"
     fi
     return 1
   fi
+  [ -n "$old_backup" ] && rm -f "$old_backup"
   info "核心安装完成: $("$BIN" version 2>/dev/null | head -n1)"
   return 0
 }
@@ -558,6 +579,28 @@ gen_reality_keypair() {
 singbox_version() {
   [ -x "$BIN" ] || { printf ''; return 0; }
   "$BIN" version 2>/dev/null | head -n1 | awk '{print $3}'
+}
+
+core_at_least() {
+  local want_major=$1 want_minor=$2 ver major rest minor
+  ver=$(singbox_version)
+  ver=${ver#v}
+  [ -n "$ver" ] || return 1
+  major=${ver%%.*}
+  rest=${ver#*.}
+  minor=${rest%%.*}
+  case "$major" in ''|*[!0-9]*) return 1 ;; esac
+  case "$minor" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$major" -gt "$want_major" ] && return 0
+  [ "$major" -eq "$want_major" ] && [ "$minor" -ge "$want_minor" ]
+}
+
+core_supports_anytls() {
+  core_at_least 1 12
+}
+
+core_supports_snell() {
+  core_at_least 1 14
 }
 
 get_server_ip() {
@@ -859,7 +902,7 @@ prompt_tag() {
   fi
   local def=${AUTO_TAG_DEFAULT:-$1} v
   while true; do
-    ask v "节点名称(tag)" "$def"
+    ask v "节点名称" "$def"
     if [ -z "$v" ]; then
       warn "名称不能为空"
       continue
@@ -875,7 +918,7 @@ prompt_tag() {
       continue
     fi
     if [ -e "$OUT_DIR/$v.json" ]; then
-      warn "该名称与出站标签冲突"
+      warn "该名称与出站名称冲突"
       continue
     fi
     TAG_VAL=$v
@@ -895,17 +938,52 @@ port_in_batch() {
   return 1
 }
 
+system_port_in_use() {
+  local port=$1 transport=${2:-tcp} out=''
+  if command -v ss >/dev/null 2>&1; then
+    if [ "$transport" = "udp" ]; then
+      out=$(ss -lnu 2>/dev/null || true)
+    else
+      out=$(ss -lnt 2>/dev/null || true)
+    fi
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out" | awk '{print $4}' | grep -qE "[:.]${port}$"
+      return $?
+    fi
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    if [ "$transport" = "udp" ]; then
+      out=$(netstat -lnu 2>/dev/null || true)
+    else
+      out=$(netstat -lnt 2>/dev/null || true)
+    fi
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out" | awk '{print $4}' | grep -qE "[:.]${port}$"
+      return $?
+    fi
+  fi
+  return 1
+}
+
+port_available() {
+  local port=$1 transport=${2:-tcp} skip_system=${3:-0}
+  port_in_use "$port" "$transport" && return 1
+  [ "$skip_system" = "1" ] && return 0
+  system_port_in_use "$port" "$transport" && return 1
+  return 0
+}
+
 random_free_port() {
   local transport=${1:-tcp} i cand
   for ((i=0; i<200; i++)); do
     cand=$(( (RANDOM * 32768 + RANDOM) % 50000 + 10000 ))
-    if ! port_in_use "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
+    if port_available "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
       printf '%s' "$cand"
       return 0
     fi
   done
   for ((cand=10000; cand<60000; cand++)); do
-    if ! port_in_use "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
+    if port_available "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
       printf '%s' "$cand"
       return 0
     fi
@@ -916,13 +994,13 @@ random_free_port() {
 suggest_port() {
   local transport=${1:-tcp} p i
   for p in 443 8443 2053 2083 2087 2096; do
-    if ! port_in_use "$p" "$transport" && ! port_in_batch "$p" "$transport"; then
+    if port_available "$p" "$transport" && ! port_in_batch "$p" "$transport"; then
       printf '%s' "$p"
       return 0
     fi
   done
   for ((i=10000; i<60000; i+=7)); do
-    if ! port_in_use "$i" "$transport" && ! port_in_batch "$i" "$transport"; then
+    if port_available "$i" "$transport" && ! port_in_batch "$i" "$transport"; then
       printf '%s' "$i"
       return 0
     fi
@@ -958,19 +1036,34 @@ port_in_use() {
 }
 
 ask_port() {
-  local def=$1 transport=${2:-tcp} v
+  local def=$1 transport=${2:-tcp} v prompt="监听端口"
   if [ "${BATCH_MODE:-0}" = "1" ] && [ -n "${BATCH_PORT:-}" ]; then
     PORT_VAL=$BATCH_PORT
     return 0
   fi
+  if [ -z "${EXCLUDE_TAG:-}" ]; then
+    def=""
+    prompt="监听端口（回车随机）"
+  fi
   while true; do
-    ask v "端口" "$def"
+    ask v "$prompt" "$def"
+    if [ -z "$v" ]; then
+      v=$(random_free_port "$transport")
+      printf '\n'
+      info "使用随机监听端口: $v/$transport"
+    fi
     if ! [[ $v =~ ^[0-9]+$ ]] || [ "$v" -lt 1 ] || [ "$v" -gt 65535 ]; then
-      warn "端口范围 1-65535"
+      warn "监听端口范围 1-65535"
       continue
     fi
-    if port_in_use "$v" "$transport"; then
-      warn "端口 $v 已被同类型节点占用，请更换"
+    v=$((10#$v))
+    if [ -n "${EXCLUDE_TAG:-}" ] && [ "$v" = "$def" ]; then
+      if port_in_use "$v" "$transport"; then
+        warn "监听端口 $v 已被同类型节点占用，请更换"
+        continue
+      fi
+    elif ! port_available "$v" "$transport"; then
+      warn "监听端口 $v 已被同类型节点或系统服务占用，请更换"
       continue
     fi
     PORT_VAL=$v
@@ -994,17 +1087,18 @@ n_get() {
 }
 
 list_nodes_table() {
-  local f tag proto port domain i=0
-  printf '%-4s %-28s %-24s %-7s %s\n' "序号" "节点名称" "协议" "端口" "域名/伪装"
-  printf '%s\n' "-------------------------------------------------------------------------------"
+  local f tag proto display port domain i=0
+  printf '%-4s %s%20s %s%20s %-8s %s\n' "序号" "节点名称" "" "协议" "" "监听端口" "域名/伪装域名"
+  printf '%s\n' "--------------------------------------------------------------------------------"
   shopt -s nullglob
   for f in "$NODE_DIR"/*.json; do
     i=$((i+1))
     tag=$(basename "$f" .json)
     proto=$(meta_get "$tag" proto)
+    display=$(proto_meta_display "$proto")
     port=$(jq -r 'if type=="array" then .[-1].listen_port else .listen_port end' "$f" 2>/dev/null || echo '-')
     domain=$(jq -r 'if type=="array" then (.[-1].tls.server_name // .[-1].handshake.server // "-") else (.tls.server_name // .handshake.server // "-") end' "$f" 2>/dev/null || echo '-')
-    printf '%-4s %-28s %-24s %-7s %s\n' "$i" "$tag" "${proto:-未知}" "$port" "$domain"
+    printf '%-4s %-28s %-24s %-8s %s\n' "$i" "$tag" "${display:-未知}" "$port" "$domain"
   done
   shopt -u nullglob
   if [ "$i" -eq 0 ]; then
@@ -1032,6 +1126,7 @@ select_node() {
     error "序号无效"
     return 1
   fi
+  choice=$((10#$choice))
   idx=$((choice - 1))
   if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#tags[@]} ]; then
     error "序号无效"
@@ -1224,6 +1319,7 @@ create_vless_reality() {
     warn "回源端口无效，已使用 443"
     hsport=443
   fi
+  hsport=$((10#$hsport))
   [ "$hsport" = "443" ] || warn "非 443 回源端口需要伪装站点在该端口提供 TLS"
   [ -n "$sid" ] || sid=$(gen_hex 4)
   ask sid "Short ID (十六进制)" "$sid"
@@ -1244,85 +1340,7 @@ create_vless_reality() {
      tls:{enabled:true,server_name:$sni,
           reality:{enabled:true,handshake:{server:$sni,server_port:$hsport},
                    private_key:$priv,short_id:[$sid]}}}')
-  save_node "$tag" "vless-reality" "$json" "$pub" 0
-}
-
-create_vless_tls() {
-  local mode=$1 edit=${2:-} tag port uuid domain tls user proto json
-  if [ -n "$edit" ]; then
-    tag=$edit
-    port=$(n_get "$tag" '.listen_port' 443)
-    uuid=$(n_get "$tag" '.users[0].uuid')
-    domain=$(n_get "$tag" '.tls.server_name')
-    info "编辑节点 [$tag]，直接回车保留原值"
-  else
-    if [ "$mode" = "vision" ]; then
-      prompt_tag "vless-vision-$(gen_hex 2)"
-    else
-      prompt_tag "vless-tls-$(gen_hex 2)"
-    fi
-    tag=$TAG_VAL
-    port=$(suggest_port tcp)
-    uuid=$(gen_uuid)
-    domain=""
-  fi
-  ask_port "$port" tcp
-  port=$PORT_VAL
-  ask uuid "UUID" "$uuid"
-  prompt_domain_cert "$domain" || return 1
-  domain=$DOMAIN_VAL
-  if [ -z "$uuid" ]; then
-    error "UUID 不能为空"
-    return 1
-  fi
-  tls=$(tls_cert_json "$domain" h2 http/1.1)
-  if [ "$mode" = "vision" ]; then
-    user=$(jq -n --arg u "$uuid" '{name:"user",uuid:$u,flow:"xtls-rprx-vision"}')
-    proto="vless-vision-tls"
-  else
-    user=$(jq -n --arg u "$uuid" '{name:"user",uuid:$u}')
-    proto="vless-tls"
-  fi
-  json=$(jq -n --arg tag "$tag" --arg listen "$LISTEN_ADDR" --argjson port "$port" \
-    --argjson user "$user" --argjson tls "$tls" \
-    '{type:"vless",tag:$tag,listen:$listen,listen_port:$port,users:[$user],tls:$tls}')
-  save_node "$tag" "$proto" "$json" "" "$CERT_INSECURE"
-}
-
-create_vless_grpc() {
-  local edit=${1:-} tag port uuid domain svc tls transport json
-  if [ -n "$edit" ]; then
-    tag=$edit
-    port=$(n_get "$tag" '.listen_port' 443)
-    uuid=$(n_get "$tag" '.users[0].uuid')
-    domain=$(n_get "$tag" '.tls.server_name')
-    svc=$(n_get "$tag" '.transport.service_name' 'grpc')
-    info "编辑节点 [$tag]，直接回车保留原值"
-  else
-    prompt_tag "vless-grpc-$(gen_hex 2)"
-    tag=$TAG_VAL
-    port=$(suggest_port tcp)
-    uuid=$(gen_uuid)
-    domain=""
-    svc="grpc"
-  fi
-  ask_port "$port" tcp
-  port=$PORT_VAL
-  ask uuid "UUID" "$uuid"
-  prompt_domain_cert "$domain" || return 1
-  domain=$DOMAIN_VAL
-  ask svc "gRPC 服务名" "$svc"
-  if [ -z "$uuid" ] || [ -z "$svc" ]; then
-    error "UUID 或 gRPC 服务名不能为空"
-    return 1
-  fi
-  tls=$(tls_cert_json "$domain" h2 http/1.1)
-  transport=$(jq -n --arg s "$svc" '{type:"grpc",service_name:$s}')
-  json=$(jq -n --arg tag "$tag" --arg listen "$LISTEN_ADDR" --argjson port "$port" \
-    --arg uuid "$uuid" --argjson tls "$tls" --argjson transport "$transport" '
-    {type:"vless",tag:$tag,listen:$listen,listen_port:$port,
-     users:[{name:"user",uuid:$uuid}],tls:$tls,transport:$transport}')
-  save_node "$tag" "vless-grpc-tls" "$json" "" "$CERT_INSECURE"
+  save_node "$tag" "vless-reality-vision" "$json" "$pub" 0
 }
 
 create_vless_ws() {
@@ -1362,44 +1380,6 @@ create_vless_ws() {
   save_node "$tag" "vless-ws-tls" "$json" "" "$CERT_INSECURE"
 }
 
-create_vless_httpupgrade() {
-  local edit=${1:-} tag port uuid domain path tls transport json
-  if [ -n "$edit" ]; then
-    tag=$edit
-    port=$(n_get "$tag" '.listen_port' 443)
-    uuid=$(n_get "$tag" '.users[0].uuid')
-    domain=$(n_get "$tag" '.tls.server_name')
-    path=$(n_get "$tag" '.transport.path' '/upgrade')
-    info "编辑节点 [$tag]，直接回车保留原值"
-  else
-    prompt_tag "vless-hu-$(gen_hex 2)"
-    tag=$TAG_VAL
-    port=$(suggest_port tcp)
-    uuid=$(gen_uuid)
-    domain=""
-    path="/upgrade-$(gen_hex 2)"
-  fi
-  ask_port "$port" tcp
-  port=$PORT_VAL
-  ask uuid "UUID" "$uuid"
-  prompt_domain_cert "$domain" || return 1
-  domain=$DOMAIN_VAL
-  ask path "HTTPUpgrade 路径" "$path"
-  [[ $path == /* ]] || path="/$path"
-  if [ -z "$uuid" ]; then
-    error "UUID 不能为空"
-    return 1
-  fi
-  tls=$(tls_cert_json "$domain" h2 http/1.1)
-  transport=$(jq -n --arg p "$path" --arg h "$domain" '{type:"httpupgrade",path:$p,host:$h}')
-  json=$(jq -n --arg tag "$tag" --arg listen "$LISTEN_ADDR" --argjson port "$port" \
-    --arg uuid "$uuid" --argjson tls "$tls" --argjson transport "$transport" '
-    {type:"vless",tag:$tag,listen:$listen,listen_port:$port,
-     users:[{name:"user",uuid:$uuid}],tls:$tls,transport:$transport}')
-  save_node "$tag" "vless-httpupgrade-tls" "$json" "" "$CERT_INSECURE"
-}
-
-
 # ================================================================
 #  Hysteria2 / TUIC
 # ================================================================
@@ -1437,7 +1417,7 @@ create_hysteria2() {
       users:[{name:"user",password:$password}],
       tls:$tls}
      + (if $masq != "" then {masquerade:$masq} else {} end))')
-  save_node "$tag" "hysteria2" "$json" "" "$CERT_INSECURE"
+  save_node "$tag" "hysteria2-quic" "$json" "" "$CERT_INSECURE"
 }
 
 create_tuic() {
@@ -1480,198 +1460,82 @@ create_tuic() {
     {type:"tuic",tag:$tag,listen:$listen,listen_port:$port,
      users:[{name:"user",uuid:$uuid,password:$password}],
      congestion_control:$cc,tls:$tls}')
-  save_node "$tag" "tuic" "$json" "" "$CERT_INSECURE"
+  save_node "$tag" "tuic-quic" "$json" "" "$CERT_INSECURE"
 }
 
 
 # ================================================================
 #  Shadowsocks 系列
 # ================================================================
-SS_METHOD=""
-
-choose_ss_method() {
-  local def=${1:-aes-256-gcm} c
-  printf '  1) aes-256-gcm (推荐)\n  2) aes-128-gcm\n  3) chacha20-ietf-poly1305\n'
-  case "$def" in
-    aes-128-gcm)             c="2" ;;
-    chacha20-ietf-poly1305)  c="3" ;;
-    *)                       c="1" ;;
-  esac
-  ask c "选择加密方式" "$c"
-  case "$c" in
-    2) SS_METHOD="aes-128-gcm" ;;
-    3) SS_METHOD="chacha20-ietf-poly1305" ;;
-    *) SS_METHOD="aes-256-gcm" ;;
-  esac
-}
-
 valid_ss2022_key() {
   local bytes=$1 key=$2 len
   len=$(printf '%s' "$key" | base64 -d 2>/dev/null | wc -c | tr -d ' ' || true)
   [ "$len" = "$bytes" ]
 }
 
-create_ss() {
-  local kind=$1 edit=${2:-} tag port method password proto prefix bytes json
-  bytes=""
-  case "$kind" in
-    aead)
-      prefix="ss-aead"
-      proto="shadowsocks-aead"
-      ;;
-    2022-128)
-      prefix="ss2022-128"
-      proto="shadowsocks-2022-128"
-      bytes=16
-      method="2022-blake3-aes-128-gcm"
-      ;;
-    2022-256)
-      prefix="ss2022-256"
-      proto="shadowsocks-2022-256"
-      bytes=32
-      method="2022-blake3-aes-256-gcm"
-      ;;
-    *)
-      error "未知 Shadowsocks 类型"
-      return 1
-      ;;
-  esac
-
+create_ss2022() {
+  local edit=${1:-} tag port method password bytes choice json
+  bytes=32
   if [ -n "$edit" ]; then
     tag=$edit
     port=$(n_get "$tag" '.listen_port' 8388)
-    method=$(n_get "$tag" '.method' "$method")
+    method=$(n_get "$tag" '.method' '2022-blake3-aes-256-gcm')
     password=$(n_get "$tag" '.password')
+    case "$method" in
+      2022-blake3-aes-128-gcm) bytes=16 ;;
+      *) method="2022-blake3-aes-256-gcm"; bytes=32 ;;
+    esac
     info "编辑节点 [$tag]，直接回车保留原值"
   else
-    prompt_tag "${prefix}-$(gen_hex 2)"
+    prompt_tag "ss2022-$(gen_hex 2)"
     tag=$TAG_VAL
     if port_in_use 8388 tcp; then
       port=$(suggest_port tcp)
     else
       port=8388
     fi
-    if [ "$kind" = "aead" ]; then
-      choose_ss_method "aes-256-gcm"
-      method=$SS_METHOD
-      password=$(gen_hex 16)
-    else
-      password=$(gen_b64 "$bytes")
-    fi
+    method=""
+    password=""
   fi
 
   ask_port "$port" tcp
   port=$PORT_VAL
 
-  if [ "$kind" = "aead" ]; then
-    choose_ss_method "$method"
-    method=$SS_METHOD
-    ask password "密码" "$password"
-    if [ -z "$password" ]; then
-      error "密码不能为空"
-      return 1
-    fi
-  else
-    while true; do
-      ask password "密码 (Base64 编码的 ${bytes} 字节密钥)" "$password"
-      if valid_ss2022_key "$bytes" "$password"; then
-        break
-      fi
-      warn "密钥无效，必须是 ${bytes} 字节的 Base64 编码"
-      password=$(gen_b64 "$bytes")
-      warn "已重新生成合法密钥作为默认值，请直接回车使用"
-    done
+  if [ -z "$method" ]; then
+    printf '  1) 2022-128 (16 字节密钥)\n  2) 2022-256 (32 字节密钥，推荐)\n'
+    ask choice "Shadowsocks-2022 密钥长度" "2"
+    case "$choice" in
+      1) method="2022-blake3-aes-128-gcm"; bytes=16 ;;
+      *) method="2022-blake3-aes-256-gcm"; bytes=32 ;;
+    esac
   fi
+
+  [ -n "$password" ] || password=$(gen_b64 "$bytes")
+  while true; do
+    ask password "密码 (Base64 编码的 ${bytes} 字节密钥)" "$password"
+    if valid_ss2022_key "$bytes" "$password"; then
+      break
+    fi
+    warn "密钥无效，必须是 ${bytes} 字节的 Base64 编码"
+    password=$(gen_b64 "$bytes")
+    warn "已重新生成合法密钥作为默认值，请直接回车使用"
+  done
 
   json=$(jq -n --arg tag "$tag" --arg listen "$LISTEN_ADDR" --argjson port "$port" \
     --arg method "$method" --arg password "$password" '
     {type:"shadowsocks",tag:$tag,listen:$listen,listen_port:$port,
      method:$method,password:$password}')
-  save_node "$tag" "$proto" "$json" "" 0
+  save_node "$tag" "shadowsocks-2022" "$json" "" 0
 }
-
-create_ss_shadowtls() {
-  local edit=${1:-} tag port stpass hs ssmethod sspass sport inner_tag cand i json
-  if [ -n "$edit" ]; then
-    tag=$edit
-    port=$(n_get "$tag" '.listen_port' 443)
-    stpass=$(n_get "$tag" '.users[0].password')
-    hs=$(n_get "$tag" '.handshake.server' 'www.apple.com')
-    ssmethod=$(jq -r '.[0].method // empty' "$NODE_DIR/$tag.json" 2>/dev/null)
-    sspass=$(jq -r '.[0].password // empty' "$NODE_DIR/$tag.json" 2>/dev/null)
-    sport=$(jq -r '.[0].listen_port // empty' "$NODE_DIR/$tag.json" 2>/dev/null)
-    inner_tag=$(jq -r '.[0].tag // empty' "$NODE_DIR/$tag.json" 2>/dev/null)
-    [ -n "$inner_tag" ] || inner_tag="${tag}-inner"
-    info "编辑节点 [$tag]，直接回车保留原值"
-  else
-    prompt_tag "ss-shadowtls-$(gen_hex 2)"
-    tag=$TAG_VAL
-    port=$(suggest_port tcp)
-    hs="www.apple.com"
-    stpass=$(gen_hex 8)
-    ssmethod="aes-256-gcm"
-    sspass=$(gen_hex 16)
-    inner_tag="${tag}-ss-$(gen_hex 2)"
-    while [ -e "$NODE_DIR/$inner_tag.json" ] || [ -e "$OUT_DIR/$inner_tag.json" ]; do
-      inner_tag="${tag}-ss-$(gen_hex 2)"
-    done
-    sport=""
-  fi
-
-  ask_port "$port" tcp
-  port=$PORT_VAL
-  ask stpass "ShadowTLS 认证密码" "$stpass"
-  ask hs "ShadowTLS 伪装域名" "$hs"
-  choose_ss_method "$ssmethod"
-  ssmethod=$SS_METHOD
-  ask sspass "内层 Shadowsocks 密码" "$sspass"
-
-  if [ -z "$sport" ]; then
-    sport=""
-    for ((i=0; i<100; i++)); do
-      cand=$((20000 + RANDOM % 20000))
-      [ "$cand" = "$port" ] && continue
-      if ! port_in_use "$cand" tcp && ! port_in_batch "$cand" tcp; then
-        sport=$cand
-        break
-      fi
-    done
-    [ -n "$sport" ] || sport=$((20000 + RANDOM % 20000))
-  fi
-
-  if [ "$port" = "$sport" ]; then
-    error "ShadowTLS 外层端口不能与内层端口相同"
-    return 1
-  fi
-
-  if [ -z "$stpass" ] || [ -z "$sspass" ] || [ -z "$hs" ]; then
-    error "密码或伪装域名不能为空"
-    return 1
-  fi
-
-  json=$(jq -n --arg tag "$tag" --arg inner "$inner_tag" --arg listen "$LISTEN_ADDR" \
-    --argjson port "$port" --argjson sport "$sport" --arg method "$ssmethod" \
-    --arg sspass "$sspass" --arg stpass "$stpass" --arg hs "$hs" '
-    [
-      {type:"shadowsocks",tag:$inner,listen:"127.0.0.1",listen_port:$sport,
-       method:$method,password:$sspass},
-      {type:"shadowtls",tag:$tag,listen:$listen,listen_port:$port,version:3,
-       users:[{name:"user",password:$stpass}],
-       handshake:{server:$hs,server_port:443},detour:$inner}
-    ]')
-  save_node "$tag" "shadowtls" "$json" "" 0
-}
-
 
 # ================================================================
 #  Trojan / VMess
 # ================================================================
 create_trojan() {
-  local kind=$1 edit=${2:-} tag port password domain tls transport proto prefix path svc json
+  local kind=$1 edit=${2:-} tag port password domain tls transport proto prefix path json
   case "$kind" in
-    tcp)  prefix="trojan";      proto="trojan-tls" ;;
-    grpc) prefix="trojan-grpc"; proto="trojan-grpc-tls" ;;
-    ws)   prefix="trojan-ws";   proto="trojan-ws-tls" ;;
+    tcp) prefix="trojan";    proto="trojan-tls" ;;
+    ws)  prefix="trojan-ws"; proto="trojan-ws-tls" ;;
     *)
       error "未知 Trojan 类型"
       return 1
@@ -1684,7 +1548,6 @@ create_trojan() {
     password=$(n_get "$tag" '.users[0].password')
     domain=$(n_get "$tag" '.tls.server_name')
     path=$(n_get "$tag" '.transport.path' '/ws')
-    svc=$(n_get "$tag" '.transport.service_name' 'grpc')
     info "编辑节点 [$tag]，直接回车保留原值"
   else
     prompt_tag "${prefix}-$(gen_hex 2)"
@@ -1693,7 +1556,6 @@ create_trojan() {
     password=$(gen_hex 16)
     domain=""
     path="/ws-$(gen_hex 2)"
-    svc="grpc"
   fi
 
   ask_port "$port" tcp
@@ -1707,9 +1569,6 @@ create_trojan() {
     ask path "WebSocket 路径" "$path"
     [[ $path == /* ]] || path="/$path"
     transport=$(jq -n --arg p "$path" '{type:"ws",path:$p}')
-  elif [ "$kind" = "grpc" ]; then
-    ask svc "gRPC 服务名" "$svc"
-    transport=$(jq -n --arg s "$svc" '{type:"grpc",service_name:$s}')
   fi
 
   if [ -z "$password" ]; then
@@ -1729,83 +1588,54 @@ create_trojan() {
 }
 
 create_vmess() {
-  local tlsflag=$1 kind=$2 edit=${3:-} tag port uuid domain tls transport proto prefix path svc json
-  case "$tlsflag-$kind" in
-    0-tcp) prefix="vmess-tcp";     proto="vmess-tcp" ;;
-    1-tcp) prefix="vmess-tcp-tls"; proto="vmess-tcp-tls" ;;
-    1-ws)  prefix="vmess-ws";      proto="vmess-ws-tls" ;;
-    1-grpc) prefix="vmess-grpc";   proto="vmess-grpc-tls" ;;
-    *)
-      error "未知 VMess 类型"
-      return 1
-      ;;
-  esac
-
+  local edit=${1:-} tag port uuid domain path tls transport json
   if [ -n "$edit" ]; then
     tag=$edit
     port=$(n_get "$tag" '.listen_port' 10086)
     uuid=$(n_get "$tag" '.users[0].uuid')
     domain=$(n_get "$tag" '.tls.server_name')
     path=$(n_get "$tag" '.transport.path' '/ws')
-    svc=$(n_get "$tag" '.transport.service_name' 'grpc')
     info "编辑节点 [$tag]，直接回车保留原值"
   else
-    prompt_tag "${prefix}-$(gen_hex 2)"
+    prompt_tag "vmess-ws-$(gen_hex 2)"
     tag=$TAG_VAL
     port=$(suggest_port tcp)
     uuid=$(gen_uuid)
     domain=""
     path="/ws-$(gen_hex 2)"
-    svc="grpc"
   fi
 
   ask_port "$port" tcp
   port=$PORT_VAL
   ask uuid "UUID" "$uuid"
-  if [ "$tlsflag" = "1" ]; then
-    prompt_domain_cert "$domain" || return 1
-    domain=$DOMAIN_VAL
-  fi
-
-  transport=""
-  if [ "$kind" = "ws" ]; then
-    ask path "WebSocket 路径" "$path"
-    [[ $path == /* ]] || path="/$path"
-    transport=$(jq -n --arg p "$path" '{type:"ws",path:$p}')
-  elif [ "$kind" = "grpc" ]; then
-    ask svc "gRPC 服务名" "$svc"
-    transport=$(jq -n --arg s "$svc" '{type:"grpc",service_name:$s}')
-  fi
+  prompt_domain_cert "$domain" || return 1
+  domain=$DOMAIN_VAL
+  ask path "WebSocket 路径" "$path"
+  [[ $path == /* ]] || path="/$path"
 
   if [ -z "$uuid" ]; then
     error "UUID 不能为空"
     return 1
   fi
 
+  tls=$(tls_cert_json "$domain" h2 http/1.1)
+  transport=$(jq -n --arg p "$path" '{type:"ws",path:$p}')
   json=$(jq -n --arg tag "$tag" --arg listen "$LISTEN_ADDR" --argjson port "$port" \
-    --arg uuid "$uuid" '
+    --arg uuid "$uuid" --argjson tls "$tls" --argjson transport "$transport" '
     {type:"vmess",tag:$tag,listen:$listen,listen_port:$port,
-     users:[{name:"user",uuid:$uuid}]}')
-  if [ "$tlsflag" = "1" ]; then
-    tls=$(tls_cert_json "$domain" h2 http/1.1)
-    json=$(jq --argjson t "$tls" '. + {tls:$t}' <<<"$json")
-  fi
-  if [ -n "$transport" ]; then
-    json=$(jq --argjson t "$transport" '. + {transport:$t}' <<<"$json")
-  fi
-  if [ "$tlsflag" = "1" ]; then
-    save_node "$tag" "$proto" "$json" "" "$CERT_INSECURE"
-  else
-    save_node "$tag" "$proto" "$json" "" 0
-  fi
+     users:[{name:"user",uuid:$uuid}],tls:$tls,transport:$transport}')
+  save_node "$tag" "vmess-ws-tls" "$json" "" "$CERT_INSECURE"
 }
-
 
 # ================================================================
 #  AnyTLS / SOCKS5
 # ================================================================
 create_anytls() {
   local edit=${1:-} tag port password domain tls json
+  if ! core_supports_anytls; then
+    error "AnyTLS 需要 sing-box 1.12.0 或更高版本，请先在“核心管理”中更新核心"
+    return 1
+  fi
   if [ -n "$edit" ]; then
     tag=$edit
     port=$(n_get "$tag" '.listen_port' 443)
@@ -1836,7 +1666,7 @@ create_anytls() {
   save_node "$tag" "anytls-tls" "$json" "" "$CERT_INSECURE"
 }
 
-create_socks() {
+create_socks5() {
   local edit=${1:-} tag port username password json
   if [ -n "$edit" ]; then
     tag=$edit
@@ -1872,11 +1702,69 @@ create_socks() {
 
 
 # ================================================================
+#  Snell
+# ================================================================
+create_snell() {
+  local edit=${1:-} tag port psk mode choice len json
+  if ! core_supports_snell; then
+    error "Snell v6 需要 sing-box 1.14.0 或更高版本，请先在“核心管理”中更新核心"
+    return 1
+  fi
+
+  if [ -n "$edit" ]; then
+    tag=$edit
+    port=$(n_get "$tag" '.listen_port' 6160)
+    psk=$(n_get "$tag" '.psk')
+    mode=$(n_get "$tag" '.mode' 'default')
+    info "编辑节点 [$tag]，直接回车保留原值"
+  else
+    prompt_tag "snell-v6-$(gen_hex 2)"
+    tag=$TAG_VAL
+    port=$(suggest_port tcp)
+    psk=$(gen_hex 16)
+    mode="default"
+  fi
+
+  ask_port "$port" tcp
+  port=$PORT_VAL
+
+  while true; do
+    ask psk "PSK (12-255 字节)" "$psk"
+    len=$(printf '%s' "$psk" | wc -c | tr -d ' ')
+    if [ "$len" -ge 12 ] && [ "$len" -le 255 ]; then
+      break
+    fi
+    warn "PSK 长度必须是 12-255 字节"
+    psk=$(gen_hex 16)
+    warn "已生成新的随机 PSK，请直接回车使用"
+  done
+
+  case "$mode" in
+    unshaped)   choice="2" ;;
+    unsafe-raw) choice="3" ;;
+    *)          choice="1" ;;
+  esac
+  printf '  1) default\n  2) unshaped\n  3) unsafe-raw\n'
+  ask choice "Snell 模式" "$choice"
+  case "$choice" in
+    2) mode="unshaped" ;;
+    3) mode="unsafe-raw" ;;
+    *) mode="default" ;;
+  esac
+
+  json=$(jq -n --arg tag "$tag" --arg listen "$LISTEN_ADDR" --argjson port "$port" \
+    --arg psk "$psk" --arg mode "$mode" '
+    {type:"snell",tag:$tag,listen:$listen,listen_port:$port,
+     version:6,psk:$psk,mode:$mode}')
+  save_node "$tag" "snell-v6" "$json" "" 0
+}
+
+# ================================================================
 #  节点查看 / 分享链接
 # ================================================================
 print_node_link() {
-  local tag=$1 proto ip port f obj domain uuid pass method path svc pbk sid insecure
-  local link userinfo payload net tlsf tlsq tagurl ssmethod sspass stpass hs inner outer client
+  local tag=$1 proto ip port f obj domain uuid pass method path pbk sid insecure
+  local link userinfo payload tlsq tagurl psk mode client
   proto=$(meta_get "$tag" proto)
   ip=$(get_server_ip)
   insecure=$(meta_get "$tag" insecure)
@@ -1889,28 +1777,6 @@ print_node_link() {
     warn "未能获取公网 IP，请手动替换链接中的服务器地址"
   fi
 
-  if [ "$proto" = "shadowtls" ]; then
-    inner=$(jq -c '.[0]' "$f")
-    outer=$(jq -c '.[1]' "$f")
-    ssmethod=$(jq -r '.method // empty' <<<"$inner")
-    sspass=$(jq -r '.password // empty' <<<"$inner")
-    stpass=$(jq -r '.users[0].password // empty' <<<"$outer")
-    hs=$(jq -r '.handshake.server // empty' <<<"$outer")
-    port=$(jq -r '.listen_port' <<<"$outer")
-    client=$(jq -n --arg ip "$ip" --argjson port "$port" --arg method "$ssmethod" \
-      --arg sspass "$sspass" --arg stpass "$stpass" --arg hs "$hs" '
-      {outbounds:[
-        {type:"shadowsocks",tag:"proxy",server:"127.0.0.1",server_port:1080,
-         method:$method,password:$sspass,detour:"shadowtls-out"},
-        {type:"shadowtls",tag:"shadowtls-out",server:$ip,server_port:$port,version:3,
-         password:$stpass,
-         tls:{enabled:true,server_name:$hs,utls:{enabled:true,fingerprint:"chrome"}}}
-      ]}')
-    warn "ShadowTLS 没有通用的分享链接，请使用以下 sing-box 客户端出站配置："
-    printf '%s\n' "$client" | jq .
-    return 0
-  fi
-
   obj=$(jq -c 'if type=="array" then .[-1] else . end' "$f")
   port=$(jq -r '.listen_port // empty' <<<"$obj")
   domain=$(jq -r '.tls.server_name // empty' <<<"$obj")
@@ -1918,10 +1784,30 @@ print_node_link() {
   pass=$(jq -r '.users[0].password // .password // empty' <<<"$obj")
   method=$(jq -r '.method // empty' <<<"$obj")
   path=$(jq -r '.transport.path // empty' <<<"$obj")
-  svc=$(jq -r '.transport.service_name // empty' <<<"$obj")
   pbk=$(meta_get "$tag" pbk)
   sid=$(jq -r '.tls.reality.short_id[0] // empty' <<<"$obj")
   tagurl=$(urlenc "$tag")
+
+  if [ "$proto" = "snell-v6" ]; then
+    psk=$(jq -r '.psk // empty' <<<"$obj")
+    mode=$(jq -r '.mode // "default"' <<<"$obj")
+    client=$(jq -n --arg tag "$tag" --arg ip "$ip" --argjson port "$port" \
+      --arg psk "$psk" '
+      {type:"snell",tag:$tag,server:$ip,server_port:$port,
+       version:6,psk:$psk,reuse:true}')
+    info "Snell 没有通用分享链接，请使用以下 Surge 配置或 sing-box 出站配置："
+    if [ "$mode" = "default" ]; then
+      printf '%s = snell, %s, %s, psk=%s, version=6, reuse=true\n' \
+        "$tag" "$ip" "$port" "$psk"
+    else
+      printf '%s = snell, %s, %s, psk=%s, version=6, mode=%s, reuse=true\n' \
+        "$tag" "$ip" "$port" "$psk" "$mode"
+      client=$(jq --arg mode "$mode" '. + {mode:$mode}' <<<"$client")
+    fi
+    printf '\n'
+    printf '%s\n' "$client" | jq .
+    return 0
+  fi
 
   tlsq="security=tls&sni=$(urlenc "$domain")"
   if [ "$insecure" = "1" ]; then
@@ -1929,43 +1815,28 @@ print_node_link() {
   fi
 
   case "$proto" in
-    vless-reality)
+    vless-reality-vision)
       link="vless://${uuid}@${ip}:${port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=$(urlenc "$domain")&fp=chrome&pbk=${pbk}&sid=${sid}&type=tcp#${tagurl}"
-      ;;
-    vless-vision-tls)
-      link="vless://${uuid}@${ip}:${port}?encryption=none&flow=xtls-rprx-vision&${tlsq}&type=tcp#${tagurl}"
-      ;;
-    vless-tls)
-      link="vless://${uuid}@${ip}:${port}?encryption=none&${tlsq}&type=tcp#${tagurl}"
-      ;;
-    vless-grpc-tls)
-      link="vless://${uuid}@${ip}:${port}?encryption=none&${tlsq}&type=grpc&serviceName=$(urlenc "$svc")#${tagurl}"
       ;;
     vless-ws-tls)
       link="vless://${uuid}@${ip}:${port}?encryption=none&${tlsq}&type=ws&path=$(urlenc "$path")&host=$(urlenc "$domain")#${tagurl}"
       ;;
-    vless-httpupgrade-tls)
-      link="vless://${uuid}@${ip}:${port}?encryption=none&${tlsq}&type=httpupgrade&path=$(urlenc "$path")&host=$(urlenc "$domain")#${tagurl}"
-      ;;
     trojan-tls)
       link="trojan://$(urlenc "$pass")@${ip}:${port}?${tlsq}&type=tcp#${tagurl}"
-      ;;
-    trojan-grpc-tls)
-      link="trojan://$(urlenc "$pass")@${ip}:${port}?${tlsq}&type=grpc&serviceName=$(urlenc "$svc")#${tagurl}"
       ;;
     trojan-ws-tls)
       link="trojan://$(urlenc "$pass")@${ip}:${port}?${tlsq}&type=ws&path=$(urlenc "$path")&host=$(urlenc "$domain")#${tagurl}"
       ;;
-    shadowsocks-aead|shadowsocks-2022-128|shadowsocks-2022-256)
+    shadowsocks-2022)
       userinfo=$(b64url "$method:$pass")
       link="ss://${userinfo}@${ip}:${port}#${tagurl}"
       ;;
-    hysteria2)
+    hysteria2-quic)
       link="hysteria2://$(urlenc "$pass")@${ip}:${port}/?sni=$(urlenc "$domain")"
       [ "$insecure" = "1" ] && link="$link&insecure=1"
       link="$link#${tagurl}"
       ;;
-    tuic)
+    tuic-quic)
       link="tuic://${uuid}:$(urlenc "$pass")@${ip}:${port}?congestion_control=bbr&alpn=h3&sni=$(urlenc "$domain")"
       [ "$insecure" = "1" ] && link="$link&allow_insecure=1"
       link="$link#${tagurl}"
@@ -1979,30 +1850,11 @@ print_node_link() {
       userinfo=$(b64url "$(jq -r '.users[0].username // empty' <<<"$obj"):$(jq -r '.users[0].password // empty' <<<"$obj")")
       link="socks://${userinfo}@${ip}:${port}#${tagurl}"
       ;;
-    vmess-tcp|vmess-tcp-tls|vmess-ws-tls|vmess-grpc-tls)
-      net="tcp"
-      tlsf=""
-      path=""
-      case "$proto" in
-        vmess-tcp-tls)
-          tlsf="tls"
-          ;;
-        vmess-ws-tls)
-          net="ws"
-          tlsf="tls"
-          path=$(jq -r '.transport.path // empty' <<<"$obj")
-          ;;
-        vmess-grpc-tls)
-          net="grpc"
-          tlsf="tls"
-          path=$(jq -r '.transport.service_name // empty' <<<"$obj")
-          ;;
-      esac
+    vmess-ws-tls)
       payload=$(jq -cn --arg ps "$tag" --arg add "$ip" --argjson port "$port" \
-        --arg id "$uuid" --arg net "$net" --arg host "$domain" --arg path "$path" \
-        --arg tls "$tlsf" --arg sni "$domain" '
+        --arg id "$uuid" --arg host "$domain" --arg path "$path" --arg sni "$domain" '
         {v:"2",ps:$ps,add:$add,port:$port,id:$id,aid:0,scy:"auto",
-         net:$net,type:"none",host:$host,path:$path,tls:$tls,sni:$sni}')
+         net:"ws",type:"none",host:$host,path:$path,tls:"tls",sni:$sni}')
       link="vmess://$(printf '%s' "$payload" | base64 | tr -d '\n')"
       ;;
     *)
@@ -2019,7 +1871,7 @@ show_node_details() {
   proto=$(meta_get "$tag" proto)
   printf '%s\n' "=============================================="
   printf '节点名称 : %s\n' "$tag"
-  printf '协议类型 : %s\n' "${proto:-未知}"
+  printf '协议类型 : %s\n' "$(proto_meta_display "$proto")"
   printf '配置路径 : %s\n' "$NODE_DIR/$tag.json"
   printf '%s\n' "=============================================="
   jq . "$NODE_DIR/$tag.json"
@@ -2104,27 +1956,17 @@ edit_node() {
   fi
   EXCLUDE_TAG="$tag"
   case "$proto" in
-    vless-reality)          create_vless_reality "$tag" ;;
-    vless-vision-tls)       create_vless_tls vision "$tag" ;;
-    vless-tls)              create_vless_tls plain "$tag" ;;
-    vless-grpc-tls)         create_vless_grpc "$tag" ;;
-    vless-ws-tls)           create_vless_ws "$tag" ;;
-    vless-httpupgrade-tls)  create_vless_httpupgrade "$tag" ;;
-    hysteria2)              create_hysteria2 "$tag" ;;
-    tuic)                   create_tuic "$tag" ;;
-    shadowsocks-aead)       create_ss aead "$tag" ;;
-    shadowsocks-2022-128)   create_ss 2022-128 "$tag" ;;
-    shadowsocks-2022-256)   create_ss 2022-256 "$tag" ;;
-    shadowtls)              create_ss_shadowtls "$tag" ;;
-    trojan-tls)             create_trojan tcp "$tag" ;;
-    trojan-grpc-tls)        create_trojan grpc "$tag" ;;
-    trojan-ws-tls)          create_trojan ws "$tag" ;;
-    vmess-tcp)              create_vmess 0 tcp "$tag" ;;
-    vmess-tcp-tls)          create_vmess 1 tcp "$tag" ;;
-    vmess-ws-tls)           create_vmess 1 ws "$tag" ;;
-    vmess-grpc-tls)         create_vmess 1 grpc "$tag" ;;
-    anytls-tls)             create_anytls "$tag" ;;
-    socks5)                 create_socks "$tag" ;;
+    vless-reality-vision)  create_vless_reality "$tag" ;;
+    vless-ws-tls)          create_vless_ws "$tag" ;;
+    hysteria2-quic)        create_hysteria2 "$tag" ;;
+    tuic-quic)             create_tuic "$tag" ;;
+    trojan-tls)            create_trojan tcp "$tag" ;;
+    trojan-ws-tls)         create_trojan ws "$tag" ;;
+    anytls-tls)            create_anytls "$tag" ;;
+    shadowsocks-2022)      create_ss2022 "$tag" ;;
+    vmess-ws-tls)          create_vmess "$tag" ;;
+    snell-v6)              create_snell "$tag" ;;
+    socks5)                create_socks5 "$tag" ;;
     *)
       warn "未知协议类型: ${proto:-空}，无法编辑"
       pause
@@ -2134,82 +1976,57 @@ edit_node() {
   pause
 }
 
-
 # ================================================================
 #  节点菜单
 # ================================================================
 print_protocol_menu() {
-  printf ' 1) VLESS-REALITY          2) VLESS-Vision-TLS\n'
-  printf ' 3) VLESS-TLS              4) VLESS-gRPC-TLS\n'
-  printf ' 5) VLESS-WS-TLS           6) VLESS-HTTPUpgrade-TLS\n'
-  printf ' 7) Hysteria2-QUIC         8) TUIC-QUIC\n'
-  printf ' 9) Shadowsocks-AEAD      10) Shadowsocks-2022-128\n'
-  printf '11) Shadowsocks-2022-256  12) Shadowsocks-ShadowTLS\n'
-  printf '13) Trojan-TLS            14) Trojan-gRPC-TLS\n'
-  printf '15) Trojan-WS-TLS         16) VMess-TCP\n'
-  printf '17) VMess-TCP-TLS         18) VMess-WS-TLS\n'
-  printf '19) VMess-gRPC-TLS        20) AnyTLS-TLS\n'
-  printf '21) SOCKS5\n'
-  printf ' 0) 返回\n'
+  printf '%2d) %-22s %2d) %s\n' 1 'VLESS-Reality-Vision' 2 'VLESS-WS-TLS'
+  printf '%2d) %-22s %2d) %s\n' 3 'Hysteria2' 4 'TUIC'
+  printf '%2d) %-22s %2d) %s\n' 5 'Trojan-TLS' 6 'Trojan-WS-TLS'
+  printf '%2d) %-22s %2d) %s\n' 7 'AnyTLS-TLS' 8 'Shadowsocks-2022'
+  printf '%2d) %-22s %2d) %s\n' 9 'VMess-WS-TLS' 10 'Snell-v6'
+  printf '%2d) %s\n' 11 'SOCKS5'
+  printf '%2d) 返回\n' 0
 }
 
 protocol_display_name() {
   case "${1:-}" in
-    1)  printf 'VLESS-REALITY' ;;
-    2)  printf 'VLESS-Vision-TLS' ;;
-    3)  printf 'VLESS-TLS' ;;
-    4)  printf 'VLESS-gRPC-TLS' ;;
-    5)  printf 'VLESS-WS-TLS' ;;
-    6)  printf 'VLESS-HTTPUpgrade-TLS' ;;
-    7)  printf 'Hysteria2-QUIC' ;;
-    8)  printf 'TUIC-QUIC' ;;
-    9)  printf 'Shadowsocks-AEAD' ;;
-    10) printf 'Shadowsocks-2022-128' ;;
-    11) printf 'Shadowsocks-2022-256' ;;
-    12) printf 'Shadowsocks-ShadowTLS' ;;
-    13) printf 'Trojan-TLS' ;;
-    14) printf 'Trojan-gRPC-TLS' ;;
-    15) printf 'Trojan-WS-TLS' ;;
-    16) printf 'VMess-TCP' ;;
-    17) printf 'VMess-TCP-TLS' ;;
-    18) printf 'VMess-WS-TLS' ;;
-    19) printf 'VMess-gRPC-TLS' ;;
-    20) printf 'AnyTLS-TLS' ;;
-    21) printf 'SOCKS5' ;;
+    1)  printf 'VLESS-Reality-Vision' ;;
+    2)  printf 'VLESS-WS-TLS' ;;
+    3)  printf 'Hysteria2' ;;
+    4)  printf 'TUIC' ;;
+    5)  printf 'Trojan-TLS' ;;
+    6)  printf 'Trojan-WS-TLS' ;;
+    7)  printf 'AnyTLS-TLS' ;;
+    8)  printf 'Shadowsocks-2022' ;;
+    9)  printf 'VMess-WS-TLS' ;;
+    10) printf 'Snell-v6' ;;
+    11) printf 'SOCKS5' ;;
     *)  printf 'NODE' ;;
   esac
 }
 
+# 左侧为节点 .meta 中保存的内部协议 ID，右侧为界面显示名称。
 proto_meta_display() {
   case "${1:-}" in
-    vless-reality)            printf 'VLESS-REALITY' ;;
-    vless-vision-tls)         printf 'VLESS-Vision-TLS' ;;
-    vless-tls)                printf 'VLESS-TLS' ;;
-    vless-grpc-tls)           printf 'VLESS-gRPC-TLS' ;;
-    vless-ws-tls)             printf 'VLESS-WS-TLS' ;;
-    vless-httpupgrade-tls)    printf 'VLESS-HTTPUpgrade-TLS' ;;
-    hysteria2)                printf 'Hysteria2-QUIC' ;;
-    tuic)                     printf 'TUIC-QUIC' ;;
-    shadowsocks-aead)         printf 'Shadowsocks-AEAD' ;;
-    shadowsocks-2022-128)     printf 'Shadowsocks-2022-128' ;;
-    shadowsocks-2022-256)     printf 'Shadowsocks-2022-256' ;;
-    shadowtls)                printf 'Shadowsocks-ShadowTLS' ;;
-    trojan-tls)               printf 'Trojan-TLS' ;;
-    trojan-grpc-tls)          printf 'Trojan-gRPC-TLS' ;;
-    trojan-ws-tls)            printf 'Trojan-WS-TLS' ;;
-    vmess-tcp)                printf 'VMess-TCP' ;;
-    vmess-tcp-tls)            printf 'VMess-TCP-TLS' ;;
-    vmess-ws-tls)             printf 'VMess-WS-TLS' ;;
-    vmess-grpc-tls)           printf 'VMess-gRPC-TLS' ;;
-    anytls-tls)               printf 'AnyTLS-TLS' ;;
-    socks5)                   printf 'SOCKS5' ;;
-    *)                        printf '%s' "${1:-未知}" ;;
+    vless-reality-vision)   printf 'VLESS-Reality-Vision' ;;
+    vless-ws-tls)           printf 'VLESS-WS-TLS' ;;
+    hysteria2-quic)         printf 'Hysteria2' ;;
+    tuic-quic)              printf 'TUIC' ;;
+    trojan-tls)             printf 'Trojan-TLS' ;;
+    trojan-ws-tls)          printf 'Trojan-WS-TLS' ;;
+    anytls-tls)             printf 'AnyTLS-TLS' ;;
+    shadowsocks-2022)       printf 'Shadowsocks-2022' ;;
+    vmess-ws-tls)           printf 'VMess-WS-TLS' ;;
+    snell-v6)               printf 'Snell-v6' ;;
+    socks5)                 printf 'SOCKS5' ;;
+    *)                      printf '%s' "${1:-未知}" ;;
   esac
 }
 
 protocol_needs_cert() {
   case "${1:-}" in
-    2|3|4|5|6|7|8|13|14|15|17|18|19|20) return 0 ;;
+    2|3|4|5|6|7|9) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -2217,7 +2034,7 @@ protocol_needs_cert() {
 create_node_by_choice() {
   local choice=${1:-} loc name
   case "$choice" in
-    1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21) ;;
+    1|2|3|4|5|6|7|8|9|10|11) ;;
     0) return 0 ;;
     *) warn "无效选项"; return 1 ;;
   esac
@@ -2232,31 +2049,22 @@ create_node_by_choice() {
 
   case "$choice" in
     1)  create_vless_reality ;;
-    2)  create_vless_tls vision ;;
-    3)  create_vless_tls plain ;;
-    4)  create_vless_grpc ;;
-    5)  create_vless_ws ;;
-    6)  create_vless_httpupgrade ;;
-    7)  create_hysteria2 ;;
-    8)  create_tuic ;;
-    9)  create_ss aead ;;
-    10) create_ss 2022-128 ;;
-    11) create_ss 2022-256 ;;
-    12) create_ss_shadowtls ;;
-    13) create_trojan tcp ;;
-    14) create_trojan grpc ;;
-    15) create_trojan ws ;;
-    16) create_vmess 0 tcp ;;
-    17) create_vmess 1 tcp ;;
-    18) create_vmess 1 ws ;;
-    19) create_vmess 1 grpc ;;
-    20) create_anytls ;;
-    21) create_socks ;;
+    2)  create_vless_ws ;;
+    3)  create_hysteria2 ;;
+    4)  create_tuic ;;
+    5)  create_trojan tcp ;;
+    6)  create_trojan ws ;;
+    7)  create_anytls ;;
+    8)  create_ss2022 ;;
+    9)  create_vmess ;;
+    10) create_snell ;;
+    11) create_socks5 ;;
   esac
 }
 
 parse_protocol_choices() {
   PROTOCOL_PICKS=()
+  PROTOCOL_INVALID=""
   local raw token p dup add=0
   raw=$(printf '%s' "${1:-}" | tr ',' ' ' | tr '\n\t' '  ')
   raw=${raw//，/ }
@@ -2266,9 +2074,19 @@ parse_protocol_choices() {
       0) return 1 ;;
     esac
     if ! [[ $token =~ ^[0-9]+$ ]]; then
+      PROTOCOL_INVALID+=" $token"
       continue
     fi
-    if [ "$token" -lt 1 ] || [ "$token" -gt 21 ]; then
+    token=${token#"${token%%[!0]*}"}
+    if [ -z "$token" ]; then
+      return 1
+    fi
+    if [ "${#token}" -gt 2 ]; then
+      PROTOCOL_INVALID+=" $token"
+      continue
+    fi
+    if [ "$token" -lt 1 ] || [ "$token" -gt 11 ]; then
+      PROTOCOL_INVALID+=" $token"
       continue
     fi
     dup=0
@@ -2366,12 +2184,12 @@ batch_create_nodes() {
 
   BATCH_PORT_LIST=()
   BATCH_PORT_TYPES=()
-  info "请为每个协议单独设置监听端口，直接回车使用随机端口"
+  info "请为每个协议单独设置监听端口，直接回车使用随机监听端口"
   idx=0
   for p in "${picks[@]}"; do
     name=$(protocol_display_name "$p")
     case "$p" in
-      7|8) transport="udp" ;;
+      3|4) transport="udp" ;;
       *)   transport="tcp" ;;
     esac
     while true; do
@@ -2379,19 +2197,20 @@ batch_create_nodes() {
       if [ -z "$v" ]; then
         v=$(random_free_port "$transport")
         printf '\n'
-        info "  -> $name 使用随机端口: $v/$transport"
+        info "  -> $name 使用随机监听端口: $v/$transport"
         break
       fi
       if ! [[ $v =~ ^[0-9]+$ ]] || [ "$v" -lt 1 ] || [ "$v" -gt 65535 ]; then
-        warn "端口范围 1-65535"
+        warn "监听端口范围 1-65535"
         continue
       fi
-      if port_in_use "$v" "$transport"; then
-        warn "端口 $v 已被同类型节点占用，请更换"
+      v=$((10#$v))
+      if ! port_available "$v" "$transport"; then
+        warn "监听端口 $v 已被同类型节点或系统服务占用，请更换"
         continue
       fi
       if port_in_batch "$v" "$transport"; then
-        warn "端口 $v 已在本批次中使用，请更换"
+        warn "监听端口 $v 已在本批次中使用，请更换"
         continue
       fi
       break
@@ -2411,6 +2230,7 @@ batch_create_nodes() {
       printf '\n'
       if [[ $BATCH_REALITY_HSPORT =~ ^[0-9]+$ ]] && \
          [ "$BATCH_REALITY_HSPORT" -ge 1 ] && [ "$BATCH_REALITY_HSPORT" -le 65535 ]; then
+        BATCH_REALITY_HSPORT=$((10#$BATCH_REALITY_HSPORT))
         break
       fi
       warn "回源端口无效，请输入 1-65535"
@@ -2418,14 +2238,14 @@ batch_create_nodes() {
     info "REALITY 回源端口: $BATCH_REALITY_HSPORT"
   fi
 
-  info "UUID、密码和传输路径将自动生成，监听端口使用上面的设置"
+  info "UUID、密码、PSK 和传输路径将自动生成，监听端口使用上面的设置"
   BATCH_MODE=1
   idx=0
   for p in "${picks[@]}"; do
     name=$(protocol_display_name "$p")
     BATCH_TAG=$(make_batch_tag "$loc" "$name")
     BATCH_PORT=${BATCH_PORT_LIST[$idx]}
-    printf '>>> 创建节点: %s (端口 %s/%s)\n' "$BATCH_TAG" "$BATCH_PORT" "${BATCH_PORT_TYPES[$idx]}"
+    printf '>>> 创建节点: %s (监听端口 %s/%s)\n' "$BATCH_TAG" "$BATCH_PORT" "${BATCH_PORT_TYPES[$idx]}"
     if create_node_by_choice "$p"; then
       ok=$((ok + 1))
     else
@@ -2450,14 +2270,13 @@ batch_create_nodes() {
   else
     error "没有节点创建成功"
   fi
-  pause
 }
 
 menu_add_node() {
   local c rc
   printf '%s\n' "------------- 新增节点 -------------"
   print_protocol_menu
-  printf '%s\n' "(批量添加请用空格或逗号分隔，例如 1 7 20)"
+  printf '%s\n' "(批量添加请用空格或逗号分隔，例如 1 3 10)"
   ask c "请选择协议" ""
   parse_protocol_choices "$c"
   rc=$?
@@ -2465,9 +2284,16 @@ menu_add_node() {
     return 0
   fi
   if [ "$rc" -ne 0 ]; then
-    warn "未选择有效协议"
+    if [ -n "$PROTOCOL_INVALID" ]; then
+      warn "无效协议编号:${PROTOCOL_INVALID}"
+    else
+      warn "未选择有效协议"
+    fi
     pause
     return 0
+  fi
+  if [ -n "$PROTOCOL_INVALID" ]; then
+    warn "已忽略无效编号:${PROTOCOL_INVALID}"
   fi
   if [ ${#PROTOCOL_PICKS[@]} -eq 1 ]; then
     create_node_by_choice "${PROTOCOL_PICKS[0]}"
@@ -2501,10 +2327,26 @@ menu_nodes() {
 # ================================================================
 #  出站管理
 # ================================================================
+outbound_type_display() {
+  case "${1:-}" in
+    direct)      printf '直连' ;;
+    socks)       printf 'SOCKS5' ;;
+    http)        printf 'HTTP' ;;
+    shadowsocks) printf 'Shadowsocks' ;;
+    vmess)       printf 'VMess' ;;
+    vless)       printf 'VLESS' ;;
+    trojan)      printf 'Trojan' ;;
+    hysteria2)   printf 'Hysteria2' ;;
+    tuic)        printf 'TUIC' ;;
+    snell)       printf 'Snell' ;;
+    *)           printf '%s' "${1:-未知}" ;;
+  esac
+}
+
 prompt_out_tag() {
   local def=$1 v
   while true; do
-    ask v "出站名称(tag)" "$def"
+    ask v "出站名称" "$def"
     if ! [[ $v =~ ^[A-Za-z0-9._-]+$ ]]; then
       warn "仅支持字母、数字、点、下划线、短横线"
       continue
@@ -2514,7 +2356,7 @@ prompt_out_tag() {
       continue
     fi
     if [ -e "$NODE_DIR/$v.json" ]; then
-      warn "该名称与节点标签冲突"
+      warn "该名称与节点名称冲突"
       continue
     fi
     if [ -e "$OUT_DIR/$v.json" ]; then
@@ -2544,10 +2386,10 @@ ask_rport() {
   while true; do
     ask v "服务器端口" "$def"
     if [[ $v =~ ^[0-9]+$ ]] && [ "$v" -ge 1 ] && [ "$v" -le 65535 ]; then
-      RPORT=$v
+      RPORT=$((10#$v))
       return 0
     fi
-    warn "端口范围 1-65535"
+    warn "服务器端口范围 1-65535"
   done
 }
 
@@ -2570,7 +2412,7 @@ ask_out_transport() {
   OUT_SVC=""
   case "$c" in
     2)
-      ask path "WS 路径" "/ws"
+      ask path "WebSocket 路径" "/ws"
       [[ $path == /* ]] || path="/$path"
       OUT_PATH=$path
       OUT_TRANSPORT_JSON=$(jq -n --arg p "$path" '{type:"ws",path:$p}')
@@ -2601,7 +2443,7 @@ finish_outbound() {
   local tag=$1 final
   final=$(head -n1 "$FINAL_FILE" 2>/dev/null || echo direct)
   if [ "$final" != "$tag" ]; then
-    if confirm "是否将 [$tag] 设为默认出站(final)?" "n"; then
+    if confirm "是否将 [$tag] 设为默认出站?" "n"; then
       printf '%s\n' "$tag" > "$FINAL_FILE"
       info "默认出站已设为 [$tag]"
     fi
@@ -2611,7 +2453,7 @@ finish_outbound() {
 
 
 # ================================================================
-#  出站协议创建: SOCKS / HTTP / SS / VMess / VLESS / Trojan / QUIC
+#  出站协议创建: SOCKS5 / HTTP / Shadowsocks / VMess / VLESS / Trojan / Hysteria2 / TUIC / Snell
 # ================================================================
 create_out_socks() {
   local mode=$1 prefix type tag server user pass port json
@@ -2737,9 +2579,9 @@ create_out_vless() {
   ask flow "流控 flow (例如 xtls-rprx-vision，可留空)" ""
   tls=""
   if [ "$security" = "3" ]; then
-    ask sni "REALITY SNI" "$server"
+    ask sni "REALITY 伪装域名 (SNI)" "$server"
     ask pub "REALITY 公钥 (pbk)" ""
-    ask sid "REALITY Short ID" ""
+    ask sid "Short ID (十六进制)" ""
     tls=$(client_tls_json "$sni" 0 "$pub" "$sid")
   elif [ "$security" = "2" ]; then
     ask sni "TLS SNI (可直接用服务器地址)" "$server"
@@ -2790,7 +2632,7 @@ create_out_trojan() {
   finish_outbound "$tag"
 }
 
-create_out_hy2() {
+create_out_hysteria2() {
   local tag server port password sni insecure bool tls json
   prompt_out_tag "hy2-out-$(gen_hex 2)"
   tag=$OUT_TAG
@@ -2800,7 +2642,7 @@ create_out_hy2() {
   port=$RPORT
   password=$(gen_hex 16)
   ask password "认证密码" "$password"
-  ask sni "TLS SNI" "$server"
+  ask sni "TLS SNI (可直接用服务器地址)" "$server"
   insecure=0
   if confirm "是否跳过证书验证? 自签证书选是" "n"; then
     insecure=1
@@ -2829,7 +2671,7 @@ create_out_tuic() {
   ask uuid "UUID" "$uuid"
   password=$(gen_hex 16)
   ask password "密码" "$password"
-  ask sni "TLS SNI" "$server"
+  ask sni "TLS SNI (可直接用服务器地址)" "$server"
   ask cc "拥塞控制 (bbr/cubic/new_reno)" "bbr"
   case "$cc" in
     bbr|cubic|new_reno) ;;
@@ -2851,6 +2693,44 @@ create_out_tuic() {
   finish_outbound "$tag"
 }
 
+create_out_snell() {
+  local tag server port psk mode choice len json
+  if ! core_supports_snell; then
+    error "Snell v6 需要 sing-box 1.14.0 或更高版本，请先在“核心管理”中更新核心"
+    return 1
+  fi
+  prompt_out_tag "snell-out-$(gen_hex 2)"
+  tag=$OUT_TAG
+  prompt_server ""
+  server=$SERVER_VAL
+  ask_rport 6160
+  port=$RPORT
+  psk=$(gen_hex 16)
+  while true; do
+    ask psk "PSK (12-255 字节)" "$psk"
+    len=$(printf '%s' "$psk" | wc -c | tr -d ' ')
+    if [ "$len" -ge 12 ] && [ "$len" -le 255 ]; then
+      break
+    fi
+    warn "PSK 长度必须是 12-255 字节"
+    psk=$(gen_hex 16)
+    warn "已生成新的随机 PSK，请直接回车使用"
+  done
+  printf '  1) default\n  2) unshaped\n  3) unsafe-raw\n'
+  ask choice "Snell 模式" "1"
+  case "$choice" in
+    2) mode="unshaped" ;;
+    3) mode="unsafe-raw" ;;
+    *) mode="default" ;;
+  esac
+  json=$(jq -n --arg tag "$tag" --arg server "$server" --argjson port "$port" \
+    --arg psk "$psk" --arg mode "$mode" '
+    {type:"snell",tag:$tag,server:$server,server_port:$port,
+     version:6,psk:$psk,reuse:true,mode:$mode}')
+  save_outbound "$tag" "$json" || return 1
+  finish_outbound "$tag"
+}
+
 create_out_custom() {
   local f tag json
   ask f "JSON 文件路径" ""
@@ -2865,7 +2745,7 @@ create_out_custom() {
   fi
   tag=$(jq -r '.tag' "$f")
   if ! [[ $tag =~ ^[A-Za-z0-9._-]+$ ]]; then
-    error "出站 tag 含非法字符: $tag"
+    error "出站名称含非法字符: $tag"
     return 1
   fi
   if [ "$tag" = "direct" ] || [ -e "$NODE_DIR/$tag.json" ] || [ -e "$OUT_DIR/$tag.json" ]; then
@@ -2897,6 +2777,7 @@ list_outbounds_table() {
     i=$((i+1))
     tag=$(basename "$f" .json)
     type=$(jq -r '.type // "?"' "$f" 2>/dev/null || echo '?')
+    type=$(outbound_type_display "$type")
     mark=""
     [ "$final" = "$tag" ] && mark="<- 默认"
     printf '%-4s %-26s %-18s %s\n' "$i" "$tag" "$type" "$mark"
@@ -2918,6 +2799,7 @@ select_outbound() {
     error "序号无效"
     return 1
   fi
+  choice=$((10#$choice))
   idx=$((choice - 1))
   if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#tags[@]} ]; then
     error "序号无效"
@@ -2943,13 +2825,14 @@ select_custom_outbound() {
   printf '%s\n' "----------------------------------------------"
   for f in "${tags[@]}"; do
     i=$((i+1))
-    printf '%-4s %-26s %s\n' "$i" "$f" "$(jq -r '.type // "?"' "$OUT_DIR/$f.json" 2>/dev/null || echo '?')"
+    printf '%-4s %-26s %s\n' "$i" "$f" "$(outbound_type_display "$(jq -r '.type // "?"' "$OUT_DIR/$f.json" 2>/dev/null || echo '?')")"
   done
   ask choice "请输入序号" ""
   if ! [[ $choice =~ ^[0-9]+$ ]]; then
     error "序号无效"
     return 1
   fi
+  choice=$((10#$choice))
   idx=$((choice - 1))
   if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#tags[@]} ]; then
     error "序号无效"
@@ -3041,6 +2924,7 @@ select_node_protocol() {
     error "序号无效"
     return 1
   fi
+  choice=$((10#$choice))
   idx=$((choice - 1))
   if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#protos[@]} ]; then
     error "序号无效"
@@ -3118,7 +3002,7 @@ view_node_routes() {
     return 0
   fi
   final=$(head -n1 "$FINAL_FILE" 2>/dev/null || echo direct)
-  printf '%-4s %-30s %-24s %s\n' "序号" "节点" "协议" "出站"
+  printf '%-4s %s%22s %s%20s %s\n' "序号" "节点名称" "" "协议" "" "出站"
   printf '%s\n' "--------------------------------------------------------------------------"
   shopt -s nullglob
   for f in "$NODE_DIR"/*.json; do
@@ -3320,7 +3204,8 @@ menu_add_outbound() {
   printf ' 3) Shadowsocks        4) VMess\n'
   printf ' 5) VLESS              6) Trojan\n'
   printf ' 7) Hysteria2          8) TUIC\n'
-  printf ' 9) 自定义 JSON        0) 返回\n'
+  printf ' 9) Snell-v6          10) 自定义 JSON\n'
+  printf ' 0) 返回\n'
   ask c "请选择" ""
   case "$c" in
     1) create_out_socks socks ;;
@@ -3329,9 +3214,10 @@ menu_add_outbound() {
     4) create_out_vmess ;;
     5) create_out_vless ;;
     6) create_out_trojan ;;
-    7) create_out_hy2 ;;
+    7) create_out_hysteria2 ;;
     8) create_out_tuic ;;
-    9) create_out_custom ;;
+    9) create_out_snell ;;
+    10) create_out_custom ;;
     0) return 0 ;;
     *) warn "无效选项" ;;
   esac
@@ -3410,7 +3296,7 @@ uninstall_core() {
     fi
     rm -f /etc/init.d/sing-box
   fi
-  rm -f "$BIN" "${BIN}.new"
+  rm -f "$BIN" "${BIN}.new" "${BIN}.old"
   info "核心已卸载"
   if [ "$keep" = "0" ]; then
     if confirm "再次确认: 删除整个目录 $SB_DIR ? 此操作不可恢复" "n"; then
@@ -3496,15 +3382,17 @@ show_help() {
 
 【基本流程】
   1. 先在“核心管理”确认核心版本（建议保持最新）。
-  2. 在“节点管理 -> 新增节点”选择协议，按提示填写端口、域名等信息。
+  2. 在“节点管理 -> 新增节点”选择协议，按提示填写监听端口、域名等信息。
      节点名称默认使用“国家码-协议”，可直接回车或手动修改。
      输入一个编号进入单节点向导；输入多个编号进入批量创建，
-     编号用空格或逗号分隔，例如 1 7 20，
-     节点会按国家码自动命名，例如 JP-VLESS-REALITY、GB-Hysteria2-QUIC。
+     编号用空格或逗号分隔，例如 1 3 10，
+     节点会按国家码自动命名，例如 JP-VLESS-Reality-Vision、GB-Hysteria2。
+     新增节点会询问监听端口，直接回车使用随机监听端口；
+     编辑节点时直接回车保留原端口。
      批量创建只需输入一次伪装域名，TLS 节点和 REALITY 共用；
      REALITY 回源端口会单独询问，默认 443；
-     每种协议还会单独询问监听端口，直接回车使用随机端口，
-     端口会自动避开已有节点和本批次内的重复占用。
+     每种协议还会单独询问监听端口，直接回车使用随机监听端口，
+     监听端口会自动避开已有节点和本批次内的重复占用。
      国家码查询失败时显示 XX，可直接输入两位国家码。
   3. TLS 类协议需要域名证书：
      - 有真实证书时，直接填写 crt 和 key 的绝对路径；
@@ -3516,20 +3404,17 @@ show_help() {
      主菜单选择 5) 分享链接，可一次查看全部节点。
 
 【协议说明】
-  VLESS-REALITY      : 无需域名证书，依赖伪装域名，默认回源 443，推荐优先使用
-  VLESS-Vision-TLS   : VLESS + XTLS Vision + TLS，需要证书
-  VLESS-TLS          : VLESS + 普通 TLS，需要证书
-  VLESS-gRPC-TLS     : gRPC 传输，需要证书，适合 CDN 中转
-  VLESS-WS-TLS       : WebSocket 传输，需要证书，适合 CDN 中转
-  VLESS-HTTPUpgrade  : HTTPUpgrade 传输，需要证书
-  Hysteria2-QUIC     : 基于 QUIC，UDP 端口，需要证书，速度快
-  TUIC-QUIC          : 基于 QUIC，UDP 端口，需要证书
-  Shadowsocks-AEAD   : 传统 AEAD 加密，无需证书
-  Shadowsocks-2022   : 新一代加密，密码必须是 Base64 密钥
-  Shadowsocks-ShadowTLS : ShadowTLS v3 + 内层 Shadowsocks
-  Trojan / VMess     : 支持 TCP、WS、gRPC 等组合
-  AnyTLS-TLS         : 需要 sing-box 1.12 及以上核心
-  SOCKS5             : 用户名密码认证的 SOCKS5 代理
+  VLESS-Reality-Vision    : 无需证书，Vision + REALITY，推荐优先使用
+  VLESS-WS-TLS            : WebSocket + TLS，适合 CDN 中转
+  Hysteria2               : 基于 QUIC，UDP 端口，需要证书，速度快
+  TUIC                    : 基于 QUIC，UDP 端口，需要证书
+  Trojan-TLS              : Trojan + TLS，需要证书
+  Trojan-WS-TLS           : WebSocket + TLS，适合 CDN 中转
+  AnyTLS-TLS              : 需要 sing-box 1.12 及以上核心
+  Shadowsocks-2022        : 新一代加密，密码必须是 Base64 密钥
+  VMess-WS-TLS            : WebSocket + TLS，兼容旧客户端
+  Snell-v6                : 需要 sing-box 1.14 及以上核心，无需证书
+  SOCKS5                  : 用户名密码认证的 SOCKS5 代理
 
 【出站分流】
   出站管理 -> 更改出站 / 节点分流
@@ -3538,7 +3423,7 @@ show_help() {
   3) 按协议批量分配出站
   4) 查看节点出站分配
   5) 清除节点出站分配
-  示例: AnyTLS-TLS 节点使用 HK 出站，Hysteria2-QUIC 节点使用 UK 出站。
+  示例: AnyTLS-TLS 节点使用 HK 出站，Hysteria2 节点使用 UK 出站。
 
 【端口与防火墙】
   如果无法连接，请确认云厂商安全组和本机防火墙已放行对应端口。
@@ -3569,10 +3454,12 @@ show_help() {
      建议选择支持 TLS 1.3 的境外网站，如 www.microsoft.com。
      回源端口默认 443，会单独询问，可自定义。
   4. AnyTLS 报错：升级核心到 1.12 或更高版本。
-  5. Shadowsocks 2022 报错：密码必须是 16 或 32 字节的 Base64 密钥。
-  6. 修改配置后未生效：执行“重启核心”。
-  7. 节点分流：出站管理 -> 更改出站，可设置默认出站，也可为指定节点或协议单独绑定出站。
-  8. 出站列表中的 direct 是内置直连，不需要重复新增。
+  5. Snell 报错：升级核心到 1.14 或更高版本；Snell 没有标准分享链接，分享页会输出 Surge 配置和 sing-box 出站 JSON。
+     Surge 格式: 节点名 = snell, 服务器, 端口, psk=密钥, version=6, reuse=true
+  6. Shadowsocks 2022 报错：密码必须是 16 或 32 字节的 Base64 密钥。
+  7. 修改配置后未生效：执行“重启核心”。
+  8. 节点分流：出站管理 -> 更改出站，可设置默认出站，也可为指定节点或协议单独绑定出站。
+  9. 出站列表中的 direct 是内置直连，不需要重复新增。
 
 ======================================================================
 EOF
@@ -3632,6 +3519,7 @@ print_header() {
 main_menu() {
   local c
   while true; do
+    ensure_dirs
     clear 2>/dev/null || true
     print_header
     printf ' 1) 节点管理\n'

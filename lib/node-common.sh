@@ -12,7 +12,7 @@ prompt_tag() {
   fi
   local def=${AUTO_TAG_DEFAULT:-$1} v
   while true; do
-    ask v "节点名称(tag)" "$def"
+    ask v "节点名称" "$def"
     if [ -z "$v" ]; then
       warn "名称不能为空"
       continue
@@ -28,7 +28,7 @@ prompt_tag() {
       continue
     fi
     if [ -e "$OUT_DIR/$v.json" ]; then
-      warn "该名称与出站标签冲突"
+      warn "该名称与出站名称冲突"
       continue
     fi
     TAG_VAL=$v
@@ -48,17 +48,52 @@ port_in_batch() {
   return 1
 }
 
+system_port_in_use() {
+  local port=$1 transport=${2:-tcp} out=''
+  if command -v ss >/dev/null 2>&1; then
+    if [ "$transport" = "udp" ]; then
+      out=$(ss -lnu 2>/dev/null || true)
+    else
+      out=$(ss -lnt 2>/dev/null || true)
+    fi
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out" | awk '{print $4}' | grep -qE "[:.]${port}$"
+      return $?
+    fi
+  fi
+  if command -v netstat >/dev/null 2>&1; then
+    if [ "$transport" = "udp" ]; then
+      out=$(netstat -lnu 2>/dev/null || true)
+    else
+      out=$(netstat -lnt 2>/dev/null || true)
+    fi
+    if [ -n "$out" ]; then
+      printf '%s\n' "$out" | awk '{print $4}' | grep -qE "[:.]${port}$"
+      return $?
+    fi
+  fi
+  return 1
+}
+
+port_available() {
+  local port=$1 transport=${2:-tcp} skip_system=${3:-0}
+  port_in_use "$port" "$transport" && return 1
+  [ "$skip_system" = "1" ] && return 0
+  system_port_in_use "$port" "$transport" && return 1
+  return 0
+}
+
 random_free_port() {
   local transport=${1:-tcp} i cand
   for ((i=0; i<200; i++)); do
     cand=$(( (RANDOM * 32768 + RANDOM) % 50000 + 10000 ))
-    if ! port_in_use "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
+    if port_available "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
       printf '%s' "$cand"
       return 0
     fi
   done
   for ((cand=10000; cand<60000; cand++)); do
-    if ! port_in_use "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
+    if port_available "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
       printf '%s' "$cand"
       return 0
     fi
@@ -69,13 +104,13 @@ random_free_port() {
 suggest_port() {
   local transport=${1:-tcp} p i
   for p in 443 8443 2053 2083 2087 2096; do
-    if ! port_in_use "$p" "$transport" && ! port_in_batch "$p" "$transport"; then
+    if port_available "$p" "$transport" && ! port_in_batch "$p" "$transport"; then
       printf '%s' "$p"
       return 0
     fi
   done
   for ((i=10000; i<60000; i+=7)); do
-    if ! port_in_use "$i" "$transport" && ! port_in_batch "$i" "$transport"; then
+    if port_available "$i" "$transport" && ! port_in_batch "$i" "$transport"; then
       printf '%s' "$i"
       return 0
     fi
@@ -111,19 +146,34 @@ port_in_use() {
 }
 
 ask_port() {
-  local def=$1 transport=${2:-tcp} v
+  local def=$1 transport=${2:-tcp} v prompt="监听端口"
   if [ "${BATCH_MODE:-0}" = "1" ] && [ -n "${BATCH_PORT:-}" ]; then
     PORT_VAL=$BATCH_PORT
     return 0
   fi
+  if [ -z "${EXCLUDE_TAG:-}" ]; then
+    def=""
+    prompt="监听端口（回车随机）"
+  fi
   while true; do
-    ask v "端口" "$def"
+    ask v "$prompt" "$def"
+    if [ -z "$v" ]; then
+      v=$(random_free_port "$transport")
+      printf '\n'
+      info "使用随机监听端口: $v/$transport"
+    fi
     if ! [[ $v =~ ^[0-9]+$ ]] || [ "$v" -lt 1 ] || [ "$v" -gt 65535 ]; then
-      warn "端口范围 1-65535"
+      warn "监听端口范围 1-65535"
       continue
     fi
-    if port_in_use "$v" "$transport"; then
-      warn "端口 $v 已被同类型节点占用，请更换"
+    v=$((10#$v))
+    if [ -n "${EXCLUDE_TAG:-}" ] && [ "$v" = "$def" ]; then
+      if port_in_use "$v" "$transport"; then
+        warn "监听端口 $v 已被同类型节点占用，请更换"
+        continue
+      fi
+    elif ! port_available "$v" "$transport"; then
+      warn "监听端口 $v 已被同类型节点或系统服务占用，请更换"
       continue
     fi
     PORT_VAL=$v
@@ -147,17 +197,18 @@ n_get() {
 }
 
 list_nodes_table() {
-  local f tag proto port domain i=0
-  printf '%-4s %-28s %-24s %-7s %s\n' "序号" "节点名称" "协议" "端口" "域名/伪装"
-  printf '%s\n' "-------------------------------------------------------------------------------"
+  local f tag proto display port domain i=0
+  printf '%-4s %s%20s %s%20s %-8s %s\n' "序号" "节点名称" "" "协议" "" "监听端口" "域名/伪装域名"
+  printf '%s\n' "--------------------------------------------------------------------------------"
   shopt -s nullglob
   for f in "$NODE_DIR"/*.json; do
     i=$((i+1))
     tag=$(basename "$f" .json)
     proto=$(meta_get "$tag" proto)
+    display=$(proto_meta_display "$proto")
     port=$(jq -r 'if type=="array" then .[-1].listen_port else .listen_port end' "$f" 2>/dev/null || echo '-')
     domain=$(jq -r 'if type=="array" then (.[-1].tls.server_name // .[-1].handshake.server // "-") else (.tls.server_name // .handshake.server // "-") end' "$f" 2>/dev/null || echo '-')
-    printf '%-4s %-28s %-24s %-7s %s\n' "$i" "$tag" "${proto:-未知}" "$port" "$domain"
+    printf '%-4s %-28s %-24s %-8s %s\n' "$i" "$tag" "${display:-未知}" "$port" "$domain"
   done
   shopt -u nullglob
   if [ "$i" -eq 0 ]; then
@@ -185,6 +236,7 @@ select_node() {
     error "序号无效"
     return 1
   fi
+  choice=$((10#$choice))
   idx=$((choice - 1))
   if [ "$idx" -lt 0 ] || [ "$idx" -ge ${#tags[@]} ]; then
     error "序号无效"

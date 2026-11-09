@@ -69,7 +69,7 @@ uninstall_core() {
     fi
     rm -f /etc/init.d/sing-box
   fi
-  rm -f "$BIN" "${BIN}.new"
+  rm -f "$BIN" "${BIN}.new" "${BIN}.old"
   info "核心已卸载"
   if [ "$keep" = "0" ]; then
     if confirm "再次确认: 删除整个目录 $SB_DIR ? 此操作不可恢复" "n"; then

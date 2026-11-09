@@ -177,7 +177,7 @@ download_file() {
 }
 
 install_core() {
-  local version=${1:-} tmp extract url base_url asset_suffix='' verr
+  local version=${1:-} tmp extract url base_url asset_suffix='' verr old_backup=''
   detect_arch || return 1
   ensure_deps || return 1
   if [ -z "$version" ]; then
@@ -224,16 +224,36 @@ install_core() {
   mkdir -p "$(dirname "$BIN")" 2>/dev/null || true
   cp -f "$extract" "${BIN}.new" || { error "写入核心失败"; rm -rf "$tmp"; return 1; }
   chmod 755 "${BIN}.new"
-  mv -f "${BIN}.new" "$BIN" || { error "替换核心失败"; rm -rf "$tmp"; return 1; }
+  if [ -x "$BIN" ]; then
+    if cp -f "$BIN" "${BIN}.old"; then
+      old_backup="${BIN}.old"
+    else
+      warn "旧核心备份失败，继续安装"
+    fi
+  fi
+  if ! mv -f "${BIN}.new" "$BIN"; then
+    if [ -n "$old_backup" ] && [ -x "$old_backup" ]; then
+      mv -f "$old_backup" "$BIN"
+      warn "已恢复旧核心: $BIN"
+    fi
+    error "替换核心失败"
+    rm -rf "$tmp"
+    return 1
+  fi
   rm -rf "$tmp"
   if ! verr=$("$BIN" version 2>&1); then
     error "核心已下载但无法运行:"
     printf '%s\n' "$verr" >&2
+    if [ -n "$old_backup" ] && [ -x "$old_backup" ]; then
+      mv -f "$old_backup" "$BIN"
+      warn "已恢复旧核心: $BIN"
+    fi
     if command -v apk >/dev/null 2>&1; then
       warn "如确认是 musl 兼容问题，可尝试: apk add --no-cache gcompat"
     fi
     return 1
   fi
+  [ -n "$old_backup" ] && rm -f "$old_backup"
   info "核心安装完成: $("$BIN" version 2>/dev/null | head -n1)"
   return 0
 }

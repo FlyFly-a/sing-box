@@ -1,10 +1,26 @@
 # ================================================================
 #  出站管理
 # ================================================================
+outbound_type_display() {
+  case "${1:-}" in
+    direct)      printf '直连' ;;
+    socks)       printf 'SOCKS5' ;;
+    http)        printf 'HTTP' ;;
+    shadowsocks) printf 'Shadowsocks' ;;
+    vmess)       printf 'VMess' ;;
+    vless)       printf 'VLESS' ;;
+    trojan)      printf 'Trojan' ;;
+    hysteria2)   printf 'Hysteria2' ;;
+    tuic)        printf 'TUIC' ;;
+    snell)       printf 'Snell' ;;
+    *)           printf '%s' "${1:-未知}" ;;
+  esac
+}
+
 prompt_out_tag() {
   local def=$1 v
   while true; do
-    ask v "出站名称(tag)" "$def"
+    ask v "出站名称" "$def"
     if ! [[ $v =~ ^[A-Za-z0-9._-]+$ ]]; then
       warn "仅支持字母、数字、点、下划线、短横线"
       continue
@@ -14,7 +30,7 @@ prompt_out_tag() {
       continue
     fi
     if [ -e "$NODE_DIR/$v.json" ]; then
-      warn "该名称与节点标签冲突"
+      warn "该名称与节点名称冲突"
       continue
     fi
     if [ -e "$OUT_DIR/$v.json" ]; then
@@ -44,10 +60,10 @@ ask_rport() {
   while true; do
     ask v "服务器端口" "$def"
     if [[ $v =~ ^[0-9]+$ ]] && [ "$v" -ge 1 ] && [ "$v" -le 65535 ]; then
-      RPORT=$v
+      RPORT=$((10#$v))
       return 0
     fi
-    warn "端口范围 1-65535"
+    warn "服务器端口范围 1-65535"
   done
 }
 
@@ -70,7 +86,7 @@ ask_out_transport() {
   OUT_SVC=""
   case "$c" in
     2)
-      ask path "WS 路径" "/ws"
+      ask path "WebSocket 路径" "/ws"
       [[ $path == /* ]] || path="/$path"
       OUT_PATH=$path
       OUT_TRANSPORT_JSON=$(jq -n --arg p "$path" '{type:"ws",path:$p}')
@@ -101,7 +117,7 @@ finish_outbound() {
   local tag=$1 final
   final=$(head -n1 "$FINAL_FILE" 2>/dev/null || echo direct)
   if [ "$final" != "$tag" ]; then
-    if confirm "是否将 [$tag] 设为默认出站(final)?" "n"; then
+    if confirm "是否将 [$tag] 设为默认出站?" "n"; then
       printf '%s\n' "$tag" > "$FINAL_FILE"
       info "默认出站已设为 [$tag]"
     fi

@@ -15,15 +15,17 @@ show_help() {
 
 【基本流程】
   1. 先在“核心管理”确认核心版本（建议保持最新）。
-  2. 在“节点管理 -> 新增节点”选择协议，按提示填写端口、域名等信息。
+  2. 在“节点管理 -> 新增节点”选择协议，按提示填写监听端口、域名等信息。
      节点名称默认使用“国家码-协议”，可直接回车或手动修改。
      输入一个编号进入单节点向导；输入多个编号进入批量创建，
-     编号用空格或逗号分隔，例如 1 7 20，
-     节点会按国家码自动命名，例如 JP-VLESS-REALITY、GB-Hysteria2-QUIC。
+     编号用空格或逗号分隔，例如 1 3 10，
+     节点会按国家码自动命名，例如 JP-VLESS-Reality-Vision、GB-Hysteria2。
+     新增节点会询问监听端口，直接回车使用随机监听端口；
+     编辑节点时直接回车保留原端口。
      批量创建只需输入一次伪装域名，TLS 节点和 REALITY 共用；
      REALITY 回源端口会单独询问，默认 443；
-     每种协议还会单独询问监听端口，直接回车使用随机端口，
-     端口会自动避开已有节点和本批次内的重复占用。
+     每种协议还会单独询问监听端口，直接回车使用随机监听端口，
+     监听端口会自动避开已有节点和本批次内的重复占用。
      国家码查询失败时显示 XX，可直接输入两位国家码。
   3. TLS 类协议需要域名证书：
      - 有真实证书时，直接填写 crt 和 key 的绝对路径；
@@ -35,20 +37,17 @@ show_help() {
      主菜单选择 5) 分享链接，可一次查看全部节点。
 
 【协议说明】
-  VLESS-REALITY      : 无需域名证书，依赖伪装域名，默认回源 443，推荐优先使用
-  VLESS-Vision-TLS   : VLESS + XTLS Vision + TLS，需要证书
-  VLESS-TLS          : VLESS + 普通 TLS，需要证书
-  VLESS-gRPC-TLS     : gRPC 传输，需要证书，适合 CDN 中转
-  VLESS-WS-TLS       : WebSocket 传输，需要证书，适合 CDN 中转
-  VLESS-HTTPUpgrade  : HTTPUpgrade 传输，需要证书
-  Hysteria2-QUIC     : 基于 QUIC，UDP 端口，需要证书，速度快
-  TUIC-QUIC          : 基于 QUIC，UDP 端口，需要证书
-  Shadowsocks-AEAD   : 传统 AEAD 加密，无需证书
-  Shadowsocks-2022   : 新一代加密，密码必须是 Base64 密钥
-  Shadowsocks-ShadowTLS : ShadowTLS v3 + 内层 Shadowsocks
-  Trojan / VMess     : 支持 TCP、WS、gRPC 等组合
-  AnyTLS-TLS         : 需要 sing-box 1.12 及以上核心
-  SOCKS5             : 用户名密码认证的 SOCKS5 代理
+  VLESS-Reality-Vision    : 无需证书，Vision + REALITY，推荐优先使用
+  VLESS-WS-TLS            : WebSocket + TLS，适合 CDN 中转
+  Hysteria2               : 基于 QUIC，UDP 端口，需要证书，速度快
+  TUIC                    : 基于 QUIC，UDP 端口，需要证书
+  Trojan-TLS              : Trojan + TLS，需要证书
+  Trojan-WS-TLS           : WebSocket + TLS，适合 CDN 中转
+  AnyTLS-TLS              : 需要 sing-box 1.12 及以上核心
+  Shadowsocks-2022        : 新一代加密，密码必须是 Base64 密钥
+  VMess-WS-TLS            : WebSocket + TLS，兼容旧客户端
+  Snell-v6                : 需要 sing-box 1.14 及以上核心，无需证书
+  SOCKS5                  : 用户名密码认证的 SOCKS5 代理
 
 【出站分流】
   出站管理 -> 更改出站 / 节点分流
@@ -57,7 +56,7 @@ show_help() {
   3) 按协议批量分配出站
   4) 查看节点出站分配
   5) 清除节点出站分配
-  示例: AnyTLS-TLS 节点使用 HK 出站，Hysteria2-QUIC 节点使用 UK 出站。
+  示例: AnyTLS-TLS 节点使用 HK 出站，Hysteria2 节点使用 UK 出站。
 
 【端口与防火墙】
   如果无法连接，请确认云厂商安全组和本机防火墙已放行对应端口。
@@ -88,10 +87,12 @@ show_help() {
      建议选择支持 TLS 1.3 的境外网站，如 www.microsoft.com。
      回源端口默认 443，会单独询问，可自定义。
   4. AnyTLS 报错：升级核心到 1.12 或更高版本。
-  5. Shadowsocks 2022 报错：密码必须是 16 或 32 字节的 Base64 密钥。
-  6. 修改配置后未生效：执行“重启核心”。
-  7. 节点分流：出站管理 -> 更改出站，可设置默认出站，也可为指定节点或协议单独绑定出站。
-  8. 出站列表中的 direct 是内置直连，不需要重复新增。
+  5. Snell 报错：升级核心到 1.14 或更高版本；Snell 没有标准分享链接，分享页会输出 Surge 配置和 sing-box 出站 JSON。
+     Surge 格式: 节点名 = snell, 服务器, 端口, psk=密钥, version=6, reuse=true
+  6. Shadowsocks 2022 报错：密码必须是 16 或 32 字节的 Base64 密钥。
+  7. 修改配置后未生效：执行“重启核心”。
+  8. 节点分流：出站管理 -> 更改出站，可设置默认出站，也可为指定节点或协议单独绑定出站。
+  9. 出站列表中的 direct 是内置直连，不需要重复新增。
 
 ======================================================================
 EOF

@@ -24,6 +24,28 @@ singbox_version() {
   "$BIN" version 2>/dev/null | head -n1 | awk '{print $3}'
 }
 
+core_at_least() {
+  local want_major=$1 want_minor=$2 ver major rest minor
+  ver=$(singbox_version)
+  ver=${ver#v}
+  [ -n "$ver" ] || return 1
+  major=${ver%%.*}
+  rest=${ver#*.}
+  minor=${rest%%.*}
+  case "$major" in ''|*[!0-9]*) return 1 ;; esac
+  case "$minor" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$major" -gt "$want_major" ] && return 0
+  [ "$major" -eq "$want_major" ] && [ "$minor" -ge "$want_minor" ]
+}
+
+core_supports_anytls() {
+  core_at_least 1 12
+}
+
+core_supports_snell() {
+  core_at_least 1 14
+}
+
 get_server_ip() {
   local ip='' url
   if [ -s "$IP_FILE" ]; then

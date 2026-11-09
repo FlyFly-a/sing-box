@@ -35,7 +35,7 @@ create_hysteria2() {
       users:[{name:"user",password:$password}],
       tls:$tls}
      + (if $masq != "" then {masquerade:$masq} else {} end))')
-  save_node "$tag" "hysteria2" "$json" "" "$CERT_INSECURE"
+  save_node "$tag" "hysteria2-quic" "$json" "" "$CERT_INSECURE"
 }
 
 create_tuic() {
@@ -78,6 +78,6 @@ create_tuic() {
     {type:"tuic",tag:$tag,listen:$listen,listen_port:$port,
      users:[{name:"user",uuid:$uuid,password:$password}],
      congestion_control:$cc,tls:$tls}')
-  save_node "$tag" "tuic" "$json" "" "$CERT_INSECURE"
+  save_node "$tag" "tuic-quic" "$json" "" "$CERT_INSECURE"
 }
 

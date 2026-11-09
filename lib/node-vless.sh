@@ -35,6 +35,7 @@ create_vless_reality() {
     warn "回源端口无效，已使用 443"
     hsport=443
   fi
+  hsport=$((10#$hsport))
   [ "$hsport" = "443" ] || warn "非 443 回源端口需要伪装站点在该端口提供 TLS"
   [ -n "$sid" ] || sid=$(gen_hex 4)
   ask sid "Short ID (十六进制)" "$sid"
@@ -55,85 +56,7 @@ create_vless_reality() {
      tls:{enabled:true,server_name:$sni,
           reality:{enabled:true,handshake:{server:$sni,server_port:$hsport},
                    private_key:$priv,short_id:[$sid]}}}')
-  save_node "$tag" "vless-reality" "$json" "$pub" 0
-}
-
-create_vless_tls() {
-  local mode=$1 edit=${2:-} tag port uuid domain tls user proto json
-  if [ -n "$edit" ]; then
-    tag=$edit
-    port=$(n_get "$tag" '.listen_port' 443)
-    uuid=$(n_get "$tag" '.users[0].uuid')
-    domain=$(n_get "$tag" '.tls.server_name')
-    info "编辑节点 [$tag]，直接回车保留原值"
-  else
-    if [ "$mode" = "vision" ]; then
-      prompt_tag "vless-vision-$(gen_hex 2)"
-    else
-      prompt_tag "vless-tls-$(gen_hex 2)"
-    fi
-    tag=$TAG_VAL
-    port=$(suggest_port tcp)
-    uuid=$(gen_uuid)
-    domain=""
-  fi
-  ask_port "$port" tcp
-  port=$PORT_VAL
-  ask uuid "UUID" "$uuid"
-  prompt_domain_cert "$domain" || return 1
-  domain=$DOMAIN_VAL
-  if [ -z "$uuid" ]; then
-    error "UUID 不能为空"
-    return 1
-  fi
-  tls=$(tls_cert_json "$domain" h2 http/1.1)
-  if [ "$mode" = "vision" ]; then
-    user=$(jq -n --arg u "$uuid" '{name:"user",uuid:$u,flow:"xtls-rprx-vision"}')
-    proto="vless-vision-tls"
-  else
-    user=$(jq -n --arg u "$uuid" '{name:"user",uuid:$u}')
-    proto="vless-tls"
-  fi
-  json=$(jq -n --arg tag "$tag" --arg listen "$LISTEN_ADDR" --argjson port "$port" \
-    --argjson user "$user" --argjson tls "$tls" \
-    '{type:"vless",tag:$tag,listen:$listen,listen_port:$port,users:[$user],tls:$tls}')
-  save_node "$tag" "$proto" "$json" "" "$CERT_INSECURE"
-}
-
-create_vless_grpc() {
-  local edit=${1:-} tag port uuid domain svc tls transport json
-  if [ -n "$edit" ]; then
-    tag=$edit
-    port=$(n_get "$tag" '.listen_port' 443)
-    uuid=$(n_get "$tag" '.users[0].uuid')
-    domain=$(n_get "$tag" '.tls.server_name')
-    svc=$(n_get "$tag" '.transport.service_name' 'grpc')
-    info "编辑节点 [$tag]，直接回车保留原值"
-  else
-    prompt_tag "vless-grpc-$(gen_hex 2)"
-    tag=$TAG_VAL
-    port=$(suggest_port tcp)
-    uuid=$(gen_uuid)
-    domain=""
-    svc="grpc"
-  fi
-  ask_port "$port" tcp
-  port=$PORT_VAL
-  ask uuid "UUID" "$uuid"
-  prompt_domain_cert "$domain" || return 1
-  domain=$DOMAIN_VAL
-  ask svc "gRPC 服务名" "$svc"
-  if [ -z "$uuid" ] || [ -z "$svc" ]; then
-    error "UUID 或 gRPC 服务名不能为空"
-    return 1
-  fi
-  tls=$(tls_cert_json "$domain" h2 http/1.1)
-  transport=$(jq -n --arg s "$svc" '{type:"grpc",service_name:$s}')
-  json=$(jq -n --arg tag "$tag" --arg listen "$LISTEN_ADDR" --argjson port "$port" \
-    --arg uuid "$uuid" --argjson tls "$tls" --argjson transport "$transport" '
-    {type:"vless",tag:$tag,listen:$listen,listen_port:$port,
-     users:[{name:"user",uuid:$uuid}],tls:$tls,transport:$transport}')
-  save_node "$tag" "vless-grpc-tls" "$json" "" "$CERT_INSECURE"
+  save_node "$tag" "vless-reality-vision" "$json" "$pub" 0
 }
 
 create_vless_ws() {
@@ -172,41 +95,3 @@ create_vless_ws() {
      users:[{name:"user",uuid:$uuid}],tls:$tls,transport:$transport}')
   save_node "$tag" "vless-ws-tls" "$json" "" "$CERT_INSECURE"
 }
-
-create_vless_httpupgrade() {
-  local edit=${1:-} tag port uuid domain path tls transport json
-  if [ -n "$edit" ]; then
-    tag=$edit
-    port=$(n_get "$tag" '.listen_port' 443)
-    uuid=$(n_get "$tag" '.users[0].uuid')
-    domain=$(n_get "$tag" '.tls.server_name')
-    path=$(n_get "$tag" '.transport.path' '/upgrade')
-    info "编辑节点 [$tag]，直接回车保留原值"
-  else
-    prompt_tag "vless-hu-$(gen_hex 2)"
-    tag=$TAG_VAL
-    port=$(suggest_port tcp)
-    uuid=$(gen_uuid)
-    domain=""
-    path="/upgrade-$(gen_hex 2)"
-  fi
-  ask_port "$port" tcp
-  port=$PORT_VAL
-  ask uuid "UUID" "$uuid"
-  prompt_domain_cert "$domain" || return 1
-  domain=$DOMAIN_VAL
-  ask path "HTTPUpgrade 路径" "$path"
-  [[ $path == /* ]] || path="/$path"
-  if [ -z "$uuid" ]; then
-    error "UUID 不能为空"
-    return 1
-  fi
-  tls=$(tls_cert_json "$domain" h2 http/1.1)
-  transport=$(jq -n --arg p "$path" --arg h "$domain" '{type:"httpupgrade",path:$p,host:$h}')
-  json=$(jq -n --arg tag "$tag" --arg listen "$LISTEN_ADDR" --argjson port "$port" \
-    --arg uuid "$uuid" --argjson tls "$tls" --argjson transport "$transport" '
-    {type:"vless",tag:$tag,listen:$listen,listen_port:$port,
-     users:[{name:"user",uuid:$uuid}],tls:$tls,transport:$transport}')
-  save_node "$tag" "vless-httpupgrade-tls" "$json" "" "$CERT_INSECURE"
-}
-

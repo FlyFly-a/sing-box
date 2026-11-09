@@ -20,6 +20,7 @@ print_header() {
 main_menu() {
   local c
   while true; do
+    ensure_dirs
     clear 2>/dev/null || true
     print_header
     printf ' 1) 节点管理\n'

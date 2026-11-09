@@ -7,10 +7,10 @@
 - **一键部署**：自动识别架构、安装依赖、下载核心并注册系统服务
 - **静态核心**：优先使用官方 musl 静态构建，兼容 Alpine 和旧 glibc 系统
 - **多系统支持**：systemd 与 OpenRC 双服务后端
-- **21 种节点协议**：覆盖 VLESS、Hysteria2、TUIC、Shadowsocks、Trojan、VMess、AnyTLS、SOCKS5
+- **11 种常用节点协议**：覆盖 VLESS、Hysteria2、TUIC、Trojan、AnyTLS、Shadowsocks、VMess、Snell、SOCKS5
 - **批量创建**：一次多选协议，按 IP 国家码 + 协议自动命名
 - **自动命名**：单节点新增时默认填充“国家码-协议”，可直接回车或手动修改
-- **节点级分流**：可为指定节点或协议绑定不同出站，例如 AnyTLS-TLS → HK、Hysteria2-QUIC → UK
+- **节点级分流**：可为指定节点或协议绑定不同出站，例如 AnyTLS-TLS → HK、Hysteria2 → UK
 - **一键查看链接**：主菜单直接查看全部节点的分享链接
 - **完整管理菜单**：节点、出站、运行、核心四套管理功能
 - **模块化源码**：协议、菜单和服务逻辑拆分到独立模块，另提供单文件构建版
@@ -80,16 +80,16 @@ bash sing-box.sh help      # 查看用法
 节点管理 → 新增节点，在协议编号提示处直接输入多个编号，用空格或逗号分隔：
 
 ```text
-请选择协议: 1 7 20
+请选择协议: 1 3 10
 ```
 
 - 输入一个编号进入单节点向导；输入多个编号进入批量创建，不会重复显示协议列表
+- 单节点新增和批量创建都会询问监听端口，直接回车使用随机监听端口；编辑节点时直接回车保留原端口
 - TLS 节点与 REALITY 共用同一个伪装域名，创建时统一输入，不使用固定默认值
 - REALITY 回源端口单独询问，默认 443
 - TLS 证书优先使用 `/etc/sing-box/cert/` 下的真实证书，找不到时自动生成自签证书
-- 每种协议单独询问监听端口，直接回车使用随机端口；会避开已占用端口和本批次内的重复
-- UUID、密码和传输路径自动生成
-- 节点按“两位国家码-协议”命名，例如 `JP-VLESS-REALITY`、`GB-Hysteria2-QUIC`、`SG-AnyTLS-TLS`
+- UUID、密码、PSK 和传输路径自动生成
+- 节点按“两位国家码-协议”命名，例如 `JP-VLESS-Reality-Vision`、`GB-Hysteria2`、`SG-AnyTLS-TLS`
 - 国家码来自服务器公网 IP，可在创建时手动修改
 - 查询失败时显示 `XX`，可直接输入两位国家码，例如 `JP`、`US`、`SG`
 - 单节点新增时也会默认填充该名称，直接回车即可接受，也可以手动改名
@@ -109,19 +109,19 @@ bash sing-box.sh help      # 查看用法
 例如：
 
 - `AnyTLS-TLS` 节点 → `HK` 出站
-- `Hysteria2-QUIC` 节点 → `UK` 出站
+- `Hysteria2` 节点 → `UK` 出站
 - 其他节点 → 默认出站
 
 ## 支持协议
 
 | 分类 | 协议 |
 |---|---|
-| VLESS | REALITY、Vision-TLS、TLS、gRPC-TLS、WS-TLS、HTTPUpgrade-TLS |
-| Hysteria2 / TUIC | Hysteria2-QUIC、TUIC-QUIC |
-| Shadowsocks | AEAD、2022-128、2022-256、ShadowTLS |
-| Trojan | TLS、gRPC-TLS、WS-TLS |
-| VMess | TCP、TCP-TLS、WS-TLS、gRPC-TLS |
-| 其他 | AnyTLS-TLS、SOCKS5 |
+| VLESS | VLESS-Reality-Vision、VLESS-WS-TLS |
+| Hysteria2 / TUIC | Hysteria2、TUIC |
+| Trojan | Trojan-TLS、Trojan-WS-TLS |
+| Shadowsocks | Shadowsocks-2022 |
+| VMess | VMess-WS-TLS |
+| 其他 | AnyTLS-TLS、Snell-v6、SOCKS5 |
 
 ## 目录结构
 
@@ -136,12 +136,13 @@ lib/
   config.sh                  目录初始化、配置合并与校验
   utils.sh                   密钥生成、公网 IP、URL 编码
   runtime.sh                 启动/停止/重启、状态、日志
-  node-common.sh             节点通用逻辑、端口检查、证书处理
+  node-common.sh             节点通用逻辑、监听端口检查、证书处理
   node-vless.sh              VLESS 系列
   node-quic.sh               Hysteria2、TUIC
-  node-ss.sh                 Shadowsocks、SS2022、ShadowTLS
+  node-ss.sh                 Shadowsocks-2022
   node-trojan-vmess.sh       Trojan、VMess
-  node-misc.sh               AnyTLS、SOCKS5
+  node-anytls-socks5.sh      AnyTLS、SOCKS5
+  node-snell.sh              Snell-v6
   node-links.sh              节点详情与分享链接
   node-menu.sh               节点管理菜单
   outbound-common.sh         出站公共逻辑
@@ -182,12 +183,15 @@ bash build.sh
 ## 注意事项
 
 - 需要 root 权限运行。
+- 本次精简移除了旧协议；升级后请在节点管理中删除不再使用的旧节点，再重新创建。
 - TLS 类协议需要域名证书；自签证书在客户端需开启“允许不安全连接”。
 - Hysteria2、TUIC 使用 UDP 端口，请在安全组和防火墙中放行 UDP。
 - REALITY 默认回源端口为 443，新增节点时可自定义。
 - 批量创建会查询公网 IP 国家码；如国家码不准，可在“使用帮助”中刷新缓存。
 - 出站列表中的 `direct` 是内置直连，仅用于切换默认出站，无需重复新增。
 - AnyTLS 需要 sing-box 1.12 及以上版本。
+- Snell-v6 需要 sing-box 1.14 及以上版本，无需证书；没有标准分享链接，分享页会输出 Surge 配置和 sing-box 出站 JSON。
+  Surge 格式：`节点名 = snell, 服务器, 端口, psk=密钥, version=6, reuse=true`。
 - Shadowsocks-2022 的密码必须是 16 或 32 字节 Base64 密钥。
 - 核心优先使用官方 musl 静态版，Alpine 和旧 glibc 系统无需额外安装 `gcompat`。
 - Alpine 极简系统需要 bash 和 curl，可先执行 `apk add --no-cache bash curl`。

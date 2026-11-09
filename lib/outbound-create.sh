@@ -1,5 +1,5 @@
 # ================================================================
-#  出站协议创建: SOCKS / HTTP / SS / VMess / VLESS / Trojan / QUIC
+#  出站协议创建: SOCKS5 / HTTP / Shadowsocks / VMess / VLESS / Trojan / Hysteria2 / TUIC / Snell
 # ================================================================
 create_out_socks() {
   local mode=$1 prefix type tag server user pass port json
@@ -125,9 +125,9 @@ create_out_vless() {
   ask flow "流控 flow (例如 xtls-rprx-vision，可留空)" ""
   tls=""
   if [ "$security" = "3" ]; then
-    ask sni "REALITY SNI" "$server"
+    ask sni "REALITY 伪装域名 (SNI)" "$server"
     ask pub "REALITY 公钥 (pbk)" ""
-    ask sid "REALITY Short ID" ""
+    ask sid "Short ID (十六进制)" ""
     tls=$(client_tls_json "$sni" 0 "$pub" "$sid")
   elif [ "$security" = "2" ]; then
     ask sni "TLS SNI (可直接用服务器地址)" "$server"
@@ -178,7 +178,7 @@ create_out_trojan() {
   finish_outbound "$tag"
 }
 
-create_out_hy2() {
+create_out_hysteria2() {
   local tag server port password sni insecure bool tls json
   prompt_out_tag "hy2-out-$(gen_hex 2)"
   tag=$OUT_TAG
@@ -188,7 +188,7 @@ create_out_hy2() {
   port=$RPORT
   password=$(gen_hex 16)
   ask password "认证密码" "$password"
-  ask sni "TLS SNI" "$server"
+  ask sni "TLS SNI (可直接用服务器地址)" "$server"
   insecure=0
   if confirm "是否跳过证书验证? 自签证书选是" "n"; then
     insecure=1
@@ -217,7 +217,7 @@ create_out_tuic() {
   ask uuid "UUID" "$uuid"
   password=$(gen_hex 16)
   ask password "密码" "$password"
-  ask sni "TLS SNI" "$server"
+  ask sni "TLS SNI (可直接用服务器地址)" "$server"
   ask cc "拥塞控制 (bbr/cubic/new_reno)" "bbr"
   case "$cc" in
     bbr|cubic|new_reno) ;;
@@ -239,6 +239,44 @@ create_out_tuic() {
   finish_outbound "$tag"
 }
 
+create_out_snell() {
+  local tag server port psk mode choice len json
+  if ! core_supports_snell; then
+    error "Snell v6 需要 sing-box 1.14.0 或更高版本，请先在“核心管理”中更新核心"
+    return 1
+  fi
+  prompt_out_tag "snell-out-$(gen_hex 2)"
+  tag=$OUT_TAG
+  prompt_server ""
+  server=$SERVER_VAL
+  ask_rport 6160
+  port=$RPORT
+  psk=$(gen_hex 16)
+  while true; do
+    ask psk "PSK (12-255 字节)" "$psk"
+    len=$(printf '%s' "$psk" | wc -c | tr -d ' ')
+    if [ "$len" -ge 12 ] && [ "$len" -le 255 ]; then
+      break
+    fi
+    warn "PSK 长度必须是 12-255 字节"
+    psk=$(gen_hex 16)
+    warn "已生成新的随机 PSK，请直接回车使用"
+  done
+  printf '  1) default\n  2) unshaped\n  3) unsafe-raw\n'
+  ask choice "Snell 模式" "1"
+  case "$choice" in
+    2) mode="unshaped" ;;
+    3) mode="unsafe-raw" ;;
+    *) mode="default" ;;
+  esac
+  json=$(jq -n --arg tag "$tag" --arg server "$server" --argjson port "$port" \
+    --arg psk "$psk" --arg mode "$mode" '
+    {type:"snell",tag:$tag,server:$server,server_port:$port,
+     version:6,psk:$psk,reuse:true,mode:$mode}')
+  save_outbound "$tag" "$json" || return 1
+  finish_outbound "$tag"
+}
+
 create_out_custom() {
   local f tag json
   ask f "JSON 文件路径" ""
@@ -253,7 +291,7 @@ create_out_custom() {
   fi
   tag=$(jq -r '.tag' "$f")
   if ! [[ $tag =~ ^[A-Za-z0-9._-]+$ ]]; then
-    error "出站 tag 含非法字符: $tag"
+    error "出站名称含非法字符: $tag"
     return 1
   fi
   if [ "$tag" = "direct" ] || [ -e "$NODE_DIR/$tag.json" ] || [ -e "$OUT_DIR/$tag.json" ]; then
