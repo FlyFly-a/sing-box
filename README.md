@@ -191,7 +191,9 @@ bash build.sh
 - 出站列表中的 `direct` 是内置直连，仅用于切换默认出站，无需重复新增。
 - AnyTLS 需要 sing-box 1.12 及以上版本。
 - Snell-v6 需要 sing-box 1.14 及以上版本，无需证书；没有标准分享链接，分享页会输出 Surge 配置和 sing-box 出站 JSON。
-  Surge 格式：`节点名 = snell, 服务器, 端口, psk=密钥, version=6, reuse=true`。
+  Surge 格式：`节点名 = snell, 服务器, 端口, psk=密钥, version=6, reuse=false`。
+  脚本创建的 sing-box 出站和 Surge 分享行统一使用 `reuse=false`。
+  Snell v6 的 `mode` 必须与服务端一致，默认为 `default`。
 - Shadowsocks-2022 的密码必须是 16 或 32 字节 Base64 密钥。
 - 核心优先使用官方 musl 静态版，Alpine 和旧 glibc 系统无需额外安装 `gcompat`。
 - Alpine 极简系统需要 bash 和 curl，可先执行 `apk add --no-cache bash curl`。

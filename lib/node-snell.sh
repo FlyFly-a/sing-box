@@ -42,7 +42,7 @@ create_snell() {
     *)          choice="1" ;;
   esac
   printf '  1) default\n  2) unshaped\n  3) unsafe-raw\n'
-  ask choice "Snell 模式" "$choice"
+  ask choice "Snell 模式 (客户端需一致)" "$choice"
   case "$choice" in
     2) mode="unshaped" ;;
     3) mode="unsafe-raw" ;;

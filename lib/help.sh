@@ -87,7 +87,7 @@ show_help() {
      回源端口默认 443，会单独询问，可自定义。
   4. AnyTLS 报错：升级核心到 1.12 或更高版本。
   5. Snell 报错：升级核心到 1.14 或更高版本；Snell 没有标准分享链接，分享页会输出 Surge 配置和 sing-box 出站 JSON。
-     Surge 格式: 节点名 = snell, 服务器, 端口, psk=密钥, version=6, reuse=true
+     Surge 格式: 节点名 = snell, 服务器, 端口, psk=密钥, version=6, reuse=false
   6. Shadowsocks 2022 报错：密码必须是 16 或 32 字节的 Base64 密钥。
   7. 修改配置后未生效：执行“重启核心”。
   8. 节点分流：出站管理 -> 更改出站，可设置默认出站，也可为指定节点或协议单独绑定出站。

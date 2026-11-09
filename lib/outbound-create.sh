@@ -263,7 +263,7 @@ create_out_snell() {
     warn "已生成新的随机 PSK，请直接回车使用"
   done
   printf '  1) default\n  2) unshaped\n  3) unsafe-raw\n'
-  ask choice "Snell 模式" "1"
+  ask choice "Snell 模式 (必须与服务端一致)" "1"
   case "$choice" in
     2) mode="unshaped" ;;
     3) mode="unsafe-raw" ;;
@@ -272,7 +272,7 @@ create_out_snell() {
   json=$(jq -n --arg tag "$tag" --arg server "$server" --argjson port "$port" \
     --arg psk "$psk" --arg mode "$mode" '
     {type:"snell",tag:$tag,server:$server,server_port:$port,
-     version:6,psk:$psk,reuse:true,mode:$mode}')
+     version:6,psk:$psk,reuse:false,mode:$mode}')
   save_outbound "$tag" "$json" || return 1
   finish_outbound "$tag"
 }

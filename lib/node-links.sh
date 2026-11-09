@@ -33,13 +33,13 @@ print_node_link() {
     client=$(jq -n --arg tag "$tag" --arg ip "$ip" --argjson port "$port" \
       --arg psk "$psk" '
       {type:"snell",tag:$tag,server:$ip,server_port:$port,
-       version:6,psk:$psk,reuse:true}')
+       version:6,psk:$psk,reuse:false}')
     info "Snell 没有通用分享链接，请使用以下 Surge 配置或 sing-box 出站配置："
     if [ "$mode" = "default" ]; then
-      printf '%s = snell, %s, %s, psk=%s, version=6, reuse=true\n' \
+      printf '%s = snell, %s, %s, psk=%s, version=6, reuse=false\n' \
         "$tag" "$ip" "$port" "$psk"
     else
-      printf '%s = snell, %s, %s, psk=%s, version=6, mode=%s, reuse=true\n' \
+      printf '%s = snell, %s, %s, psk=%s, version=6, mode=%s, reuse=false\n' \
         "$tag" "$ip" "$port" "$psk" "$mode"
       client=$(jq --arg mode "$mode" '. + {mode:$mode}' <<<"$client")
     fi
