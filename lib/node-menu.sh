@@ -167,7 +167,7 @@ make_batch_tag() {
 
 batch_create_nodes() {
   local p need_cert=0 need_domain=0 has_reality=0 ok=0 fail=0 loc name detected
-  local idx=0 transport def v
+  local idx=0 transport v
   local -a picks=()
 
   if [ "$#" -gt 0 ]; then
@@ -227,22 +227,9 @@ batch_create_nodes() {
     done
   fi
 
-  BATCH_REALITY_SNI=""
-  BATCH_REALITY_HSPORT=""
-  if [ "$has_reality" -eq 1 ]; then
-    BATCH_REALITY_SNI=$BATCH_DOMAIN
-    BATCH_REALITY_HSPORT=443
-    ask BATCH_REALITY_HSPORT "REALITY 回源端口 (伪装站点端口)" "443"
-    if ! [[ $BATCH_REALITY_HSPORT =~ ^[0-9]+$ ]] || \
-       [ "$BATCH_REALITY_HSPORT" -lt 1 ] || [ "$BATCH_REALITY_HSPORT" -gt 65535 ]; then
-      warn "回源端口无效，使用 443"
-      BATCH_REALITY_HSPORT=443
-    fi
-  fi
-
   BATCH_PORT_LIST=()
   BATCH_PORT_TYPES=()
-  info "请为每个协议单独设置监听端口，直接回车使用默认值"
+  info "请为每个协议单独设置监听端口，直接回车使用随机端口"
   idx=0
   for p in "${picks[@]}"; do
     name=$(protocol_display_name "$p")
@@ -250,9 +237,14 @@ batch_create_nodes() {
       7|8) transport="udp" ;;
       *)   transport="tcp" ;;
     esac
-    def=$(suggest_port "$transport")
     while true; do
-      ask v "[$((idx + 1))/${#picks[@]}] $name 监听端口" "$def"
+      ask v "[$((idx + 1))/${#picks[@]}] $name 监听端口（回车随机）" ""
+      if [ -z "$v" ]; then
+        v=$(random_free_port "$transport")
+        printf '\n'
+        info "  -> $name 使用随机端口: $v/$transport"
+        break
+      fi
       if ! [[ $v =~ ^[0-9]+$ ]] || [ "$v" -lt 1 ] || [ "$v" -gt 65535 ]; then
         warn "端口范围 1-65535"
         continue
@@ -271,6 +263,23 @@ batch_create_nodes() {
     BATCH_PORT_TYPES+=("$transport")
     idx=$((idx + 1))
   done
+
+  BATCH_REALITY_SNI=""
+  BATCH_REALITY_HSPORT=""
+  if [ "$has_reality" -eq 1 ]; then
+    BATCH_REALITY_SNI=$BATCH_DOMAIN
+    BATCH_REALITY_HSPORT=443
+    while true; do
+      ask BATCH_REALITY_HSPORT "REALITY 回源端口 (伪装站点端口)" "443"
+      printf '\n'
+      if [[ $BATCH_REALITY_HSPORT =~ ^[0-9]+$ ]] && \
+         [ "$BATCH_REALITY_HSPORT" -ge 1 ] && [ "$BATCH_REALITY_HSPORT" -le 65535 ]; then
+        break
+      fi
+      warn "回源端口无效，请输入 1-65535"
+    done
+    info "REALITY 回源端口: $BATCH_REALITY_HSPORT"
+  fi
 
   info "UUID、密码和传输路径将自动生成，监听端口使用上面的设置"
   BATCH_MODE=1

@@ -48,6 +48,24 @@ port_in_batch() {
   return 1
 }
 
+random_free_port() {
+  local transport=${1:-tcp} i cand
+  for ((i=0; i<200; i++)); do
+    cand=$(( (RANDOM * 32768 + RANDOM) % 50000 + 10000 ))
+    if ! port_in_use "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  for ((cand=10000; cand<60000; cand++)); do
+    if ! port_in_use "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  printf '%s' "$((10000 + RANDOM % 50000))"
+}
+
 suggest_port() {
   local transport=${1:-tcp} p i
   for p in 443 8443 2053 2083 2087 2096; do
