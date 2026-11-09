@@ -2,7 +2,7 @@
 # ================================================================
 #  sing-box 一键部署管理脚本（单文件构建版）
 #  由 build.sh 自动生成，请勿直接编辑；源码见 lib/ 目录
-#  构建时间: 2026-11-09 14:07:24
+#  构建时间: 2026-11-09 16:07:32
 # ================================================================
 
 # ================================================================
@@ -893,6 +893,24 @@ port_in_batch() {
     fi
   done
   return 1
+}
+
+random_free_port() {
+  local transport=${1:-tcp} i cand
+  for ((i=0; i<200; i++)); do
+    cand=$(( (RANDOM * 32768 + RANDOM) % 50000 + 10000 ))
+    if ! port_in_use "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  for ((cand=10000; cand<60000; cand++)); do
+    if ! port_in_use "$cand" "$transport" && ! port_in_batch "$cand" "$transport"; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  printf '%s' "$((10000 + RANDOM % 50000))"
 }
 
 suggest_port() {
@@ -2286,7 +2304,7 @@ make_batch_tag() {
 
 batch_create_nodes() {
   local p need_cert=0 need_domain=0 has_reality=0 ok=0 fail=0 loc name detected
-  local idx=0 transport def v
+  local idx=0 transport v
   local -a picks=()
 
   if [ "$#" -gt 0 ]; then
@@ -2346,22 +2364,9 @@ batch_create_nodes() {
     done
   fi
 
-  BATCH_REALITY_SNI=""
-  BATCH_REALITY_HSPORT=""
-  if [ "$has_reality" -eq 1 ]; then
-    BATCH_REALITY_SNI=$BATCH_DOMAIN
-    BATCH_REALITY_HSPORT=443
-    ask BATCH_REALITY_HSPORT "REALITY 回源端口 (伪装站点端口)" "443"
-    if ! [[ $BATCH_REALITY_HSPORT =~ ^[0-9]+$ ]] || \
-       [ "$BATCH_REALITY_HSPORT" -lt 1 ] || [ "$BATCH_REALITY_HSPORT" -gt 65535 ]; then
-      warn "回源端口无效，使用 443"
-      BATCH_REALITY_HSPORT=443
-    fi
-  fi
-
   BATCH_PORT_LIST=()
   BATCH_PORT_TYPES=()
-  info "请为每个协议单独设置监听端口，直接回车使用默认值"
+  info "请为每个协议单独设置监听端口，直接回车使用随机端口"
   idx=0
   for p in "${picks[@]}"; do
     name=$(protocol_display_name "$p")
@@ -2369,9 +2374,14 @@ batch_create_nodes() {
       7|8) transport="udp" ;;
       *)   transport="tcp" ;;
     esac
-    def=$(suggest_port "$transport")
     while true; do
-      ask v "[$((idx + 1))/${#picks[@]}] $name 监听端口" "$def"
+      ask v "[$((idx + 1))/${#picks[@]}] $name 监听端口（回车随机）" ""
+      if [ -z "$v" ]; then
+        v=$(random_free_port "$transport")
+        printf '\n'
+        info "  -> $name 使用随机端口: $v/$transport"
+        break
+      fi
       if ! [[ $v =~ ^[0-9]+$ ]] || [ "$v" -lt 1 ] || [ "$v" -gt 65535 ]; then
         warn "端口范围 1-65535"
         continue
@@ -2390,6 +2400,23 @@ batch_create_nodes() {
     BATCH_PORT_TYPES+=("$transport")
     idx=$((idx + 1))
   done
+
+  BATCH_REALITY_SNI=""
+  BATCH_REALITY_HSPORT=""
+  if [ "$has_reality" -eq 1 ]; then
+    BATCH_REALITY_SNI=$BATCH_DOMAIN
+    BATCH_REALITY_HSPORT=443
+    while true; do
+      ask BATCH_REALITY_HSPORT "REALITY 回源端口 (伪装站点端口)" "443"
+      printf '\n'
+      if [[ $BATCH_REALITY_HSPORT =~ ^[0-9]+$ ]] && \
+         [ "$BATCH_REALITY_HSPORT" -ge 1 ] && [ "$BATCH_REALITY_HSPORT" -le 65535 ]; then
+        break
+      fi
+      warn "回源端口无效，请输入 1-65535"
+    done
+    info "REALITY 回源端口: $BATCH_REALITY_HSPORT"
+  fi
 
   info "UUID、密码和传输路径将自动生成，监听端口使用上面的设置"
   BATCH_MODE=1
@@ -3476,7 +3503,7 @@ show_help() {
      节点会按国家码自动命名，例如 JP-VLESS-REALITY、GB-Hysteria2-QUIC。
      批量创建只需输入一次伪装域名，TLS 节点和 REALITY 共用；
      REALITY 回源端口会单独询问，默认 443；
-     每种协议还会单独询问监听端口，直接回车使用建议值，
+     每种协议还会单独询问监听端口，直接回车使用随机端口，
      端口会自动避开已有节点和本批次内的重复占用。
      国家码查询失败时显示 XX，可直接输入两位国家码。
   3. TLS 类协议需要域名证书：
