@@ -240,7 +240,7 @@ create_out_tuic() {
 }
 
 create_out_snell() {
-  local tag server port psk mode choice len json
+  local tag server port psk len json
   if ! core_supports_snell; then
     error "Snell v6 需要 sing-box 1.14.0 或更高版本，请先在“核心管理”中更新核心"
     return 1
@@ -262,17 +262,10 @@ create_out_snell() {
     psk=$(gen_hex 16)
     warn "已生成新的随机 PSK，请直接回车使用"
   done
-  printf '  1) default\n  2) unshaped\n  3) unsafe-raw\n'
-  ask choice "Snell 模式 (必须与服务端一致)" "1"
-  case "$choice" in
-    2) mode="unshaped" ;;
-    3) mode="unsafe-raw" ;;
-    *) mode="default" ;;
-  esac
   json=$(jq -n --arg tag "$tag" --arg server "$server" --argjson port "$port" \
-    --arg psk "$psk" --arg mode "$mode" '
+    --arg psk "$psk" '
     {type:"snell",tag:$tag,server:$server,server_port:$port,
-     version:6,psk:$psk,reuse:false,mode:$mode}')
+     version:6,psk:$psk,reuse:false,mode:"default"}')
   save_outbound "$tag" "$json" || return 1
   finish_outbound "$tag"
 }
