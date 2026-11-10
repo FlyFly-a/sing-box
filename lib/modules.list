@@ -1,0 +1,24 @@
+# 模块加载顺序（base.sh 必须最先加载）
+base.sh
+protocols.sh
+system.sh
+config.sh
+utils.sh
+runtime.sh
+node-common.sh
+node-vless.sh
+node-quic.sh
+node-ss.sh
+node-trojan-vmess.sh
+node-anytls-socks5.sh
+node-snell.sh
+node-links.sh
+node-menu.sh
+outbound-common.sh
+outbound-link.sh
+outbound-create.sh
+outbound-menu.sh
+core.sh
+help.sh
+menu.sh
+main.sh
