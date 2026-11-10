@@ -35,7 +35,7 @@
 以 root 执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/FlyFly-a/sing-box/main/dist/sing-box-oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/FlyFly-a/sing-box/main1/dist/sing-box-oneclick.sh \
   -o /usr/local/bin/sb
 chmod +x /usr/local/bin/sb
 sb
