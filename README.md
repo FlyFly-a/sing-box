@@ -449,9 +449,6 @@ lib/
   main.sh                    命令行参数与首次安装
 dist/
   sing-box-oneclick.sh       构建产物（单文件版）
-tests/
-  run.sh                     离线测试套件入口
-  common.sh                  测试框架（断言、沙箱、交互桩函数）
 ```
 
 ---
