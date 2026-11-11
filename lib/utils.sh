@@ -227,6 +227,25 @@ urldec() {
   urldec_raw "${1//+/ }"
 }
 
+# 统一 Base64: 去掉空白、URL-safe 转标准字符、按长度补齐 padding
+b64norm() {
+  local s=${1:-}
+  s=$(printf '%s' "$s" | tr -d '[:space:]' | tr '_-' '/+')
+  case $(( ${#s} % 4 )) in
+    0) ;;
+    2) s+='==' ;;
+    3) s+='=' ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$s"
+}
+
+b64decode() {
+  local s
+  s=$(b64norm "${1:-}") || return 1
+  printf '%s' "$s" | base64 -d 2>/dev/null
+}
+
 b64url() {
   printf '%s' "${1:-}" | base64 | tr -d '[:space:]' | tr '+/' '-_' | tr -d '='
 }

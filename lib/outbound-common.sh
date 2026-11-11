@@ -93,18 +93,30 @@ save_outbound() {
     if [ -n "$spass" ]; then
       case "$smethod" in
         2022-blake3-aes-128-gcm)
+          spass=$(b64norm "$spass") || {
+            error "Shadowsocks-2022 密钥必须是 16 字节 Base64"
+            return 1
+          }
           valid_ss2022_key 16 "$spass" || {
             error "Shadowsocks-2022 密钥必须是 16 字节 Base64"
             return 1
           }
           ;;
         2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305)
+          spass=$(b64norm "$spass") || {
+            error "Shadowsocks-2022 密钥必须是 32 字节 Base64"
+            return 1
+          }
           valid_ss2022_key 32 "$spass" || {
             error "Shadowsocks-2022 密钥必须是 32 字节 Base64"
             return 1
           }
           ;;
       esac
+      json=$(jq --arg p "$spass" '.password = $p' <<<"$json") || {
+        error "出站配置写入失败"
+        return 1
+      }
     fi
   fi
 

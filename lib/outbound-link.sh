@@ -287,7 +287,7 @@ _vmess_decode() {
   local body=$1 clean cand out
   clean=$(printf '%s' "$body" | tr -d '\r\n\t')
   for cand in "$clean" "${clean// /+}"; do
-    out=$(printf '%s' "$cand" | tr '_-' '/+' | base64 -d 2>/dev/null || true)
+    out=$(b64decode "$cand" || true)
     [ -n "$out" ] || continue
     if printf '%s' "$out" | jq -e . >/dev/null 2>&1; then
       printf '%s' "$out"
@@ -385,7 +385,7 @@ parse_link_ss() {
     return 1
   fi
 
-  decoded=$(printf '%s' "$userinfo" | tr '_-' '/+' | base64 -d 2>/dev/null || true)
+  decoded=$(b64decode "$userinfo" || true)
   if [ -n "$decoded" ] && [[ $decoded == *:* ]]; then
     method=${decoded%%:*}
     pass=${decoded#*:}
@@ -406,12 +406,20 @@ parse_link_ss() {
   fi
   case "$method" in
     2022-blake3-aes-128-gcm)
+      pass=$(b64norm "$pass") || {
+        OUT_ERROR="Shadowsocks-2022 密钥必须是 16 字节 Base64"
+        return 1
+      }
       valid_ss2022_key 16 "$pass" || {
         OUT_ERROR="Shadowsocks-2022 密钥必须是 16 字节 Base64"
         return 1
       }
       ;;
     2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305)
+      pass=$(b64norm "$pass") || {
+        OUT_ERROR="Shadowsocks-2022 密钥必须是 32 字节 Base64"
+        return 1
+      }
       valid_ss2022_key 32 "$pass" || {
         OUT_ERROR="Shadowsocks-2022 密钥必须是 32 字节 Base64"
         return 1

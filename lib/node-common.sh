@@ -241,7 +241,7 @@ valid_psk() {
 
 valid_ss2022_key() {
   local bytes=$1 key=$2 len
-  len=$(printf '%s' "$key" | base64 -d 2>/dev/null | wc -c | tr -d ' ' || true)
+  len=$(b64decode "$key" | wc -c | tr -d ' ' || true)
   [ "$len" = "$bytes" ]
 }
 
