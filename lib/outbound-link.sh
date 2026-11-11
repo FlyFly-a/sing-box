@@ -127,7 +127,7 @@ parse_link_standard() {
     return 1
   fi
   userinfo=${userinfo%@*}
-  user=$(urldec "$userinfo")
+  user=$(urldec_raw "$userinfo")
 
   [ "$scheme" = "anytls" ] && default_port=443
   if ! parse_host_port "$hostport" "$default_port"; then
@@ -393,7 +393,7 @@ parse_link_ss() {
     method=${userinfo%%:*}
     pass=${userinfo#*:}
     [ "$pass" = "$userinfo" ] && pass=""
-    pass=$(urldec "$pass")
+    pass=$(urldec_raw "$pass")
   fi
 
   if ! parse_host_port "$hostport"; then
@@ -404,6 +404,20 @@ parse_link_ss() {
     OUT_ERROR="Shadowsocks 链接缺少加密方式、地址或端口"
     return 1
   fi
+  case "$method" in
+    2022-blake3-aes-128-gcm)
+      valid_ss2022_key 16 "$pass" || {
+        OUT_ERROR="Shadowsocks-2022 密钥必须是 16 字节 Base64"
+        return 1
+      }
+      ;;
+    2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305)
+      valid_ss2022_key 32 "$pass" || {
+        OUT_ERROR="Shadowsocks-2022 密钥必须是 32 字节 Base64"
+        return 1
+      }
+      ;;
+  esac
 
   OUT_JSON=$(jq -n --arg tag "PENDING" --arg server "$PARSED_HOST" --argjson port "$PARSED_PORT" \
     --arg method "$method" --arg pass "$pass" \

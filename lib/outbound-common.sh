@@ -82,8 +82,32 @@ save_outbound() {
   local tag=$1
   local json=$2
   local tmp
+  local smethod spass
   valid_tag "$tag" || { error "出站名称非法: $tag"; return 1; }
   [ "$tag" = "direct" ] && { error "direct 是保留名称"; return 1; }
+
+  # Shadowsocks-2022 的 password 必须是 16/32 字节 Base64 密钥
+  smethod=$(jq -r '.method // empty' <<<"$json" 2>/dev/null || true)
+  if [ -n "$smethod" ]; then
+    spass=$(jq -r '.password // empty' <<<"$json" 2>/dev/null || true)
+    if [ -n "$spass" ]; then
+      case "$smethod" in
+        2022-blake3-aes-128-gcm)
+          valid_ss2022_key 16 "$spass" || {
+            error "Shadowsocks-2022 密钥必须是 16 字节 Base64"
+            return 1
+          }
+          ;;
+        2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305)
+          valid_ss2022_key 32 "$spass" || {
+            error "Shadowsocks-2022 密钥必须是 32 字节 Base64"
+            return 1
+          }
+          ;;
+      esac
+    fi
+  fi
+
   mkdir -p "$OUT_DIR" 2>/dev/null || true
   tmp=$(mktemp "$OUT_DIR/.out.XXXXXX") || { error "创建临时文件失败"; return 1; }
   if ! printf '%s\n' "$json" | jq . > "$tmp"; then

@@ -954,9 +954,10 @@ urlenc() {
   jq -rn --arg v "${1:-}" '$v|@uri'
 }
 
-# 百分号解码: 只处理合法的 %HH，保留字面反斜杠和损坏的百分号
-urldec() {
-  local s=${1//+/ } out='' prefix hex ch
+# 百分号解码: 只处理合法的 %HH，保留字面反斜杠和损坏的百分号。
+# urldec_raw 不把 + 当空格，适合 URL userinfo / 密码 / Base64 密钥。
+urldec_raw() {
+  local s=${1:-} out='' prefix hex ch
   while [[ $s == *%* ]]; do
     prefix=${s%%%*}
     out+=$prefix
@@ -972,6 +973,11 @@ urldec() {
   done
   out+=$s
   printf '%s' "$out"
+}
+
+# 查询串/ fragment 语义: + 表示空格
+urldec() {
+  urldec_raw "${1//+/ }"
 }
 
 b64url() {
@@ -2676,8 +2682,32 @@ save_outbound() {
   local tag=$1
   local json=$2
   local tmp
+  local smethod spass
   valid_tag "$tag" || { error "出站名称非法: $tag"; return 1; }
   [ "$tag" = "direct" ] && { error "direct 是保留名称"; return 1; }
+
+  # Shadowsocks-2022 的 password 必须是 16/32 字节 Base64 密钥
+  smethod=$(jq -r '.method // empty' <<<"$json" 2>/dev/null || true)
+  if [ -n "$smethod" ]; then
+    spass=$(jq -r '.password // empty' <<<"$json" 2>/dev/null || true)
+    if [ -n "$spass" ]; then
+      case "$smethod" in
+        2022-blake3-aes-128-gcm)
+          valid_ss2022_key 16 "$spass" || {
+            error "Shadowsocks-2022 密钥必须是 16 字节 Base64"
+            return 1
+          }
+          ;;
+        2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305)
+          valid_ss2022_key 32 "$spass" || {
+            error "Shadowsocks-2022 密钥必须是 32 字节 Base64"
+            return 1
+          }
+          ;;
+      esac
+    fi
+  fi
+
   mkdir -p "$OUT_DIR" 2>/dev/null || true
   tmp=$(mktemp "$OUT_DIR/.out.XXXXXX") || { error "创建临时文件失败"; return 1; }
   if ! printf '%s\n' "$json" | jq . > "$tmp"; then
@@ -2824,7 +2854,7 @@ parse_link_standard() {
     return 1
   fi
   userinfo=${userinfo%@*}
-  user=$(urldec "$userinfo")
+  user=$(urldec_raw "$userinfo")
 
   [ "$scheme" = "anytls" ] && default_port=443
   if ! parse_host_port "$hostport" "$default_port"; then
@@ -3090,7 +3120,7 @@ parse_link_ss() {
     method=${userinfo%%:*}
     pass=${userinfo#*:}
     [ "$pass" = "$userinfo" ] && pass=""
-    pass=$(urldec "$pass")
+    pass=$(urldec_raw "$pass")
   fi
 
   if ! parse_host_port "$hostport"; then
@@ -3101,6 +3131,20 @@ parse_link_ss() {
     OUT_ERROR="Shadowsocks 链接缺少加密方式、地址或端口"
     return 1
   fi
+  case "$method" in
+    2022-blake3-aes-128-gcm)
+      valid_ss2022_key 16 "$pass" || {
+        OUT_ERROR="Shadowsocks-2022 密钥必须是 16 字节 Base64"
+        return 1
+      }
+      ;;
+    2022-blake3-aes-256-gcm|2022-blake3-chacha20-poly1305)
+      valid_ss2022_key 32 "$pass" || {
+        OUT_ERROR="Shadowsocks-2022 密钥必须是 32 字节 Base64"
+        return 1
+      }
+      ;;
+  esac
 
   OUT_JSON=$(jq -n --arg tag "PENDING" --arg server "$PARSED_HOST" --argjson port "$PARSED_PORT" \
     --arg method "$method" --arg pass "$pass" \
@@ -3593,6 +3637,9 @@ set_route() {
 bind_nodes_route() {
   local -a nodes=()
   local out node
+  if [ -x "$BIN" ]; then
+    check_config || { error "当前配置校验失败，请先修复出站配置"; pause; return 0; }
+  fi
   select_nodes_multi || { pause; return 0; }
   nodes=("${SELECTED_NODES[@]}")
   select_outbound_real || { pause; return 0; }
@@ -3613,6 +3660,9 @@ bind_nodes_route() {
 reset_nodes_direct() {
   local -a nodes=()
   local node count changed=0
+  if [ -x "$BIN" ]; then
+    check_config || { error "当前配置校验失败，请先修复出站配置"; pause; return 0; }
+  fi
   select_nodes_multi || { pause; return 0; }
   nodes=("${SELECTED_NODES[@]}")
   count=${#nodes[@]}

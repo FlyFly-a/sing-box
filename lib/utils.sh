@@ -201,9 +201,10 @@ urlenc() {
   jq -rn --arg v "${1:-}" '$v|@uri'
 }
 
-# 百分号解码: 只处理合法的 %HH，保留字面反斜杠和损坏的百分号
-urldec() {
-  local s=${1//+/ } out='' prefix hex ch
+# 百分号解码: 只处理合法的 %HH，保留字面反斜杠和损坏的百分号。
+# urldec_raw 不把 + 当空格，适合 URL userinfo / 密码 / Base64 密钥。
+urldec_raw() {
+  local s=${1:-} out='' prefix hex ch
   while [[ $s == *%* ]]; do
     prefix=${s%%%*}
     out+=$prefix
@@ -219,6 +220,11 @@ urldec() {
   done
   out+=$s
   printf '%s' "$out"
+}
+
+# 查询串/ fragment 语义: + 表示空格
+urldec() {
+  urldec_raw "${1//+/ }"
 }
 
 b64url() {

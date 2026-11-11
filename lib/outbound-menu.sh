@@ -330,6 +330,9 @@ set_route() {
 bind_nodes_route() {
   local -a nodes=()
   local out node
+  if [ -x "$BIN" ]; then
+    check_config || { error "当前配置校验失败，请先修复出站配置"; pause; return 0; }
+  fi
   select_nodes_multi || { pause; return 0; }
   nodes=("${SELECTED_NODES[@]}")
   select_outbound_real || { pause; return 0; }
@@ -350,6 +353,9 @@ bind_nodes_route() {
 reset_nodes_direct() {
   local -a nodes=()
   local node count changed=0
+  if [ -x "$BIN" ]; then
+    check_config || { error "当前配置校验失败，请先修复出站配置"; pause; return 0; }
+  fi
   select_nodes_multi || { pause; return 0; }
   nodes=("${SELECTED_NODES[@]}")
   count=${#nodes[@]}
