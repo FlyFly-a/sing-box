@@ -417,7 +417,7 @@ vless / vmess / trojan / hysteria2 / tuic / ss / anytls
 - LXC 没有 `ss` / `netstat` 时，端口检测回退到 `/proc/net`
 - 没有 systemd/OpenRC 时使用后台进程；LXC 重启后需用 rc.local、LXC autostart 或 cron 保活
 
-205MB 存储非常紧，安装前建议先确认：
+小存储空间使用紧张，安装前建议先确认：
 
 ```bash
 df -h
@@ -546,4 +546,4 @@ bash build.sh
 - Shadowsocks-2022 使用 32 字节 Base64 密钥
 - 出站 TLS 客户端默认 `insecure=true`，用于兼容对端常见的自签证书
 - 低内存环境默认日志级别为 `warn`；可用 `SB_LOG_LEVEL` 覆盖，日志超过 `SB_LOG_MAX_KB` 会轮转
-- 205MB 等小存储环境安装前会检查剩余空间，不足会直接拒绝，避免下载到一半失败
+- 小存储环境安装前会检查剩余空间，不足会直接拒绝，避免下载到一半失败
