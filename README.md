@@ -157,7 +157,7 @@ SNI域名:                               ← TLS / REALITY 协议
 适用于把另一台服务器作为落地。支持：
 
 ```text
-vless / vmess / trojan / hysteria2 / hy2 / tuic / ss / anytls
+vless / vmess / trojan / hysteria2 / tuic / ss / anytls
 ```
 
 不支持：
@@ -347,12 +347,10 @@ vless / vmess / trojan / hysteria2 / hy2 / tuic / ss / anytls
 - AnyTLS 需要 sing-box 1.12+
 - Snell-v6 需要 sing-box 1.14+
 
-> 显示名不带 `-TLS` 后缀，但 VLESS-WS、Trojan、Trojan-WS、VMess-WS、AnyTLS、Hysteria2、TUIC 实际都启用 TLS。去掉后缀是为了避免 Sub-Store 把 `TL` 识别成东帝汶国家码。
-
 ### 分享链接与出站导入
 
 - 10 种协议生成标准分享链接；Snell-v6 输出 Surge 行
-- 出站粘贴链接支持：`vless`、`vmess`、`trojan`、`hysteria2/hy2`、`tuic`、`ss`、`anytls`
+- 出站粘贴链接支持：`vless`、`vmess`、`trojan`、`hysteria2`、`tuic`、`ss`、`anytls`
 - SOCKS5 与 Snell 不作为链接导入，使用“手动填写”
 - 带 `plugin` 的 SS、未支持的传输类型会明确报错，不会生成错误配置
 
@@ -388,7 +386,6 @@ vless / vmess / trojan / hysteria2 / hy2 / tuic / ss / anytls
 | `/etc/sing-box/routes/` | 节点出口绑定 |
 | `/etc/sing-box/cert/` | 自签证书与私钥 |
 | `/etc/sing-box/log/` | 运行日志 |
-| `/etc/sing-box/server_ip` | 主公网地址缓存 |
 | `/etc/sing-box/server_ip4` | 公网 IPv4 缓存 |
 | `/etc/sing-box/server_ip6` | 公网 IPv6 缓存 |
 | `/etc/sing-box/server_country` | 国家码缓存 |
@@ -497,14 +494,13 @@ bash tests/run.sh
 | J | 单节点/批量创建、传输矩阵、外部链接变体、原子配置 |
 | K | IPv4/IPv6 环境自适应（监听地址、附加 IPv4 入站、双栈链接） |
 
-当前共 289 条断言。依赖 `jq >= 1.6`、`openssl`、`base64`。修改 `lib/` 后建议先跑测试再构建。
+当前共 296 条断言。依赖 `jq >= 1.6`、`openssl`、`base64`。修改 `lib/` 后建议先跑测试再构建。
 
 ---
 
 ## 注意事项
 
 - 需要 root 权限运行，bash 4.0 及以上
-- 当前节点数据格式与旧版 `.meta` 格式不兼容；升级后需要重新创建节点
 - 所有需要证书的节点共用同一套自签证书，客户端需开启「允许不安全连接 / allowInsecure」
 - Hysteria2、TUIC 只使用 UDP；Shadowsocks-2022 同时监听 TCP 和 UDP，请在安全组和防火墙中同时放行
 - 双栈环境会同时输出 IPv4/IPv6 两套链接；`bindv6only=1` 会增加一个 IPv4 入站
